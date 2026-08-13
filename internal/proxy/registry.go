@@ -11,9 +11,12 @@ func AllTargets() []Target {
 		NewShellTarget(),
 		NewGitTarget(),
 		NewNpmTarget(),
+		NewVscodeTarget(),
 		NewGnomeTarget(),
+		NewKdeTarget(),
 		NewDockerdTarget(),
 		NewDockerConfigTarget(),
+		NewLxdTarget(),
 		NewSnapTarget(),
 		NewAptTarget(),
 	}

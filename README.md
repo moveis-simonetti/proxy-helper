@@ -58,14 +58,23 @@ separada por vírgula (ou `all`, o padrão):
 - `shell` — `~/.bashrc` / `~/.zshrc`
 - `git`
 - `npm`
+- `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato (Cursor, Antigravity)
 - `gnome` — configurações de proxy do sistema GNOME
+- `kde` — proxy do KIO (KDE Plasma), via `kwriteconfig`
 - `dockerd` — o daemon do Docker
 - `docker-config` — `~/.docker/config.json` (lado cliente, usado por `docker build`/`docker run`)
+- `lxd` — o daemon do LXD, via `lxc config`
 - `snap`
 - `apt`
 
 Targets não disponíveis no sistema atual (ex: `gnome` fora de uma sessão
-GNOME, `snap` onde o snapd não está instalado) são pulados automaticamente.
+GNOME, `kde` fora do Plasma, `snap`/`lxd` onde o pacote correspondente não
+está instalado) são pulados automaticamente.
+
+`proxy unset --targets gnome` também limpa o cache de proxy do PackageKit
+(usado por GNOME Software/Discover) quando presente, contornando um bug
+onde ele mantém o proxy antigo mesmo depois do proxy do sistema ser
+desligado; isso pode pedir sudo mesmo sem `snap`/`apt` no `--targets`.
 
 ## Uso pontual
 

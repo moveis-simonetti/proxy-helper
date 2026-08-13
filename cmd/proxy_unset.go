@@ -18,7 +18,7 @@ var proxyUnsetCmd = &cobra.Command{
 }
 
 func init() {
-	proxyUnsetCmd.Flags().StringSliceVar(&unsetTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,gnome,dockerd,docker-config,snap,apt,all)")
+	proxyUnsetCmd.Flags().StringSliceVar(&unsetTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyUnsetCmd.Flags().BoolVar(&unsetDryRun, "dry-run", false, "print what would change without applying it")
 	proxyCmd.AddCommand(proxyUnsetCmd)
 }

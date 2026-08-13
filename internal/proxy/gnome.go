@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -13,8 +14,14 @@ type gnomeTarget struct{}
 
 func NewGnomeTarget() Target { return &gnomeTarget{} }
 
-func (t *gnomeTarget) Name() string       { return "gnome" }
-func (t *gnomeTarget) RequiresRoot() bool { return false }
+func (t *gnomeTarget) Name() string { return "gnome" }
+
+// RequiresRoot reflects that Unset needs sudo only on systems where the
+// PackageKit cache workaround below actually applies; Set never needs it.
+func (t *gnomeTarget) RequiresRoot() bool {
+	_, err := os.Stat(packageKitDBPath)
+	return err == nil
+}
 
 func (t *gnomeTarget) Available() bool {
 	if !commandExists("gsettings") {
@@ -83,7 +90,31 @@ func (t *gnomeTarget) Set(ex *Executor, cfg Config) error {
 }
 
 func (t *gnomeTarget) Unset(ex *Executor) error {
-	return ex.Run("gsettings", "set", "org.gnome.system.proxy", "mode", "none")
+	if err := ex.Run("gsettings", "set", "org.gnome.system.proxy", "mode", "none"); err != nil {
+		return err
+	}
+	return clearPackageKitProxyCache(ex)
+}
+
+const packageKitDBPath = "/var/lib/PackageKit/transactions.db"
+
+// clearPackageKitProxyCache works around PackageKit/PackageKit#392:
+// PackageKit (used by GNOME Software, Discover, etc.) caches the proxy it
+// last saw from GSettings in its own sqlite database and doesn't clear it
+// when the desktop proxy is turned off, so package managers built on it
+// keep using a stale proxy. Deleting the cached row and restarting the
+// daemon is the documented workaround. A no-op where PackageKit isn't in use.
+func clearPackageKitProxyCache(ex *Executor) error {
+	if _, err := os.Stat(packageKitDBPath); err != nil {
+		return nil
+	}
+	if !commandExists("sqlite3") || !commandExists("pkcon") {
+		return nil
+	}
+	if err := ex.RunPrivileged("sqlite3", packageKitDBPath, "DELETE FROM proxy;"); err != nil {
+		return fmt.Errorf("clearing PackageKit proxy cache: %w", err)
+	}
+	return ex.RunPrivileged("pkcon", "quit")
 }
 
 func (t *gnomeTarget) Status(elevate bool) (Status, error) {

@@ -2,7 +2,49 @@
 
 CLI para configurar e limpar configurações de proxy em shells e ferramentas de desenvolvimento de uma vez só.
 
+## Instalação
+
+Baixe o binário da [última release](https://github.com/moveis-simonetti/proxy-helper/releases/latest)
+(publicada automaticamente a cada tag `vX.Y.Z`, veja `.github/workflows/release.yml`):
+
+```
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) echo "arquitetura não suportada: $ARCH" >&2; exit 1 ;;
+esac
+
+curl -fsSLO "https://github.com/moveis-simonetti/proxy-helper/releases/latest/download/proxy-helper-linux-$ARCH"
+```
+
+Para conferir a integridade do binário baixado contra o `checksums.txt` da release
+(faça isso antes de renomear/mover o arquivo, o `checksums.txt` referencia o nome original):
+
+```
+curl -fsSLO "https://github.com/moveis-simonetti/proxy-helper/releases/latest/download/checksums.txt"
+sha256sum --check --ignore-missing checksums.txt
+```
+
+Torne executável e instale no PATH:
+
+```
+chmod +x "proxy-helper-linux-$ARCH"
+sudo mv "proxy-helper-linux-$ARCH" /usr/local/bin/proxy-helper
+```
+
+Confirme que está tudo certo:
+
+```
+proxy-helper --help
+```
+
+Para baixar uma versão específica em vez da última, troque `latest/download` por
+`download/vX.Y.Z` na URL (ex: `.../releases/download/v0.1.0/proxy-helper-linux-amd64`).
+
 ## Build
+
+Alternativamente, para compilar a partir do código-fonte (requer Go, veja a versão em `go.mod`):
 
 ```
 go build -o proxy-helper .

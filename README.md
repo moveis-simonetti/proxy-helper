@@ -42,7 +42,7 @@ proxy-helper --help
 ```
 
 Para baixar uma versão específica em vez da última, troque `latest/download` por
-`download/vX.Y.Z` na URL (ex: `.../releases/download/v0.1.0/proxy-helper-linux-amd64`).
+`download/vX.Y.Z` na URL (ex: `.../releases/download/v0.3.0/proxy-helper-linux-amd64`).
 
 ## Build
 

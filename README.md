@@ -2,6 +2,8 @@
 
 CLI para configurar e limpar configurações de proxy em shells e ferramentas de desenvolvimento de uma vez só.
 
+Inspirado no [linux-proxy-configuration-helper](https://gitlab.com/brlin/linux-proxy-configuration-helper).
+
 ## Instalação
 
 Baixe o binário da [última release](https://github.com/moveis-simonetti/proxy-helper/releases/latest)

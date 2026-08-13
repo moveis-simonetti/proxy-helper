@@ -53,6 +53,12 @@ func applyConfig(cfg proxy.Config, targetNames []string, dryRun bool) error {
 		return err
 	}
 
+	pf, err := proxy.LoadProfiles()
+	if err != nil {
+		return err
+	}
+	cfg.NoProxy = proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
+
 	ex := &proxy.Executor{DryRun: dryRun}
 	return runAcross(targets, func(t proxy.Target) (string, error) {
 		if !t.Available() {

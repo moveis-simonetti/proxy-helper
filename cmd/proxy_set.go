@@ -61,7 +61,7 @@ func init() {
 	proxySetCmd.Flags().StringVar(&setPort, "port", "", "proxy port")
 	proxySetCmd.Flags().StringVar(&setUser, "user", "", "proxy username")
 	proxySetCmd.Flags().StringVar(&setPass, "pass", "", "proxy password")
-	proxySetCmd.Flags().StringSliceVar(&setNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy")
+	proxySetCmd.Flags().StringSliceVar(&setNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
 	proxySetCmd.Flags().StringVar(&setProfile, "profile", "", "apply a saved profile instead of --host/--port/etc (see \"proxy profile\")")
 	proxySetCmd.Flags().StringSliceVar(&setTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxySetCmd.Flags().BoolVar(&setDryRun, "dry-run", false, "print what would change without applying it")

@@ -7,10 +7,24 @@ import (
 	"path/filepath"
 )
 
+// DefaultGlobalNoProxy lists hosts that bypass the proxy regardless of which
+// profile (if any) is active, unless overridden via "proxy config set".
+var DefaultGlobalNoProxy = []string{"host.docker.internal", "localhost", "127.0.0.1"}
+
 // ProfileFile is the on-disk format for saved proxy profiles.
 type ProfileFile struct {
 	ActiveProfile string            `json:"active_profile,omitempty"`
+	GlobalNoProxy []string          `json:"global_no_proxy,omitempty"`
 	Profiles      map[string]Config `json:"profiles"`
+}
+
+// EffectiveGlobalNoProxy returns the configured global no-proxy list,
+// falling back to DefaultGlobalNoProxy when none has been set.
+func (pf *ProfileFile) EffectiveGlobalNoProxy() []string {
+	if pf.GlobalNoProxy != nil {
+		return pf.GlobalNoProxy
+	}
+	return DefaultGlobalNoProxy
 }
 
 // ConfigFilePath returns the path to the profiles config file. It does not

@@ -248,14 +248,14 @@ func init() {
 	proxyProfileAddCmd.Flags().StringVar(&profileAddPort, "port", "", "proxy port")
 	proxyProfileAddCmd.Flags().StringVar(&profileAddUser, "user", "", "proxy username")
 	proxyProfileAddCmd.Flags().StringVar(&profileAddPass, "pass", "", "proxy password")
-	proxyProfileAddCmd.Flags().StringSliceVar(&profileAddNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy")
+	proxyProfileAddCmd.Flags().StringSliceVar(&profileAddNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
 
 	proxyProfileEditCmd.Flags().StringVar(&profileEditScheme, "scheme", "", "proxy scheme: http, https, socks5")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditHost, "host", "", "proxy host")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditPort, "port", "", "proxy port")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditUser, "user", "", "proxy username")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditPass, "pass", "", "proxy password")
-	proxyProfileEditCmd.Flags().StringSliceVar(&profileEditNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy")
+	proxyProfileEditCmd.Flags().StringSliceVar(&profileEditNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
 
 	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableDryRun, "dry-run", false, "print what would change without applying it")

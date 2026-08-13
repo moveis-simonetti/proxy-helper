@@ -47,3 +47,23 @@ func (c Config) URL() (string, error) {
 func (c Config) NoProxyString() string {
 	return strings.Join(c.NoProxy, ",")
 }
+
+// MergeNoProxy combines the global no-proxy list with a profile/config-
+// specific one, removing duplicates while preserving order (global entries
+// first).
+func MergeNoProxy(global, specific []string) []string {
+	seen := make(map[string]bool, len(global)+len(specific))
+	merged := make([]string, 0, len(global)+len(specific))
+	add := func(hosts []string) {
+		for _, h := range hosts {
+			if h == "" || seen[h] {
+				continue
+			}
+			seen[h] = true
+			merged = append(merged, h)
+		}
+	}
+	add(global)
+	add(specific)
+	return merged
+}

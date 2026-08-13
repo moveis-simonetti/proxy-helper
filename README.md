@@ -95,6 +95,24 @@ mostra se cada target está com proxy configurado; alguns targets (ex: `snap`)
 precisam de `sudo` para uma leitura precisa e vão perguntar, a menos que
 `-y`/`--no-sudo` seja passado.
 
+## No-proxy global
+
+Além do `--no-proxy` de cada `proxy set`/perfil, existe uma lista global de
+hosts que sempre ficam de fora do proxy, independente de qual perfil (se
+algum) estiver ativo. O padrão é `host.docker.internal,localhost,127.0.0.1`.
+Essa lista é mesclada (sem duplicatas) com o `--no-proxy` de cada aplicação.
+
+```
+# Ver a lista global efetiva
+proxy-helper proxy config show
+
+# Trocar a lista global
+proxy-helper proxy config set --no-proxy host.docker.internal,localhost,127.0.0.1,.local
+
+# Voltar para o padrão
+proxy-helper proxy config reset-no-proxy
+```
+
 ## Perfis de proxy
 
 Digitar `--host`/`--port`/`--user`/`--pass` toda vez cansa, então as

@@ -158,3 +158,28 @@ como ativo, use `--profile` no `proxy set` (mutuamente exclusivo com
 ```
 proxy-helper proxy set --profile vpn-casa --targets git,npm
 ```
+
+## Importar de um PAC (proxy auto-config)
+
+Em vez de digitar host/porta na mão, dá pra importar de uma URL de PAC (o
+`.pac` que browsers usam via WPAD, ex: `http://192.168.111.70/proxy.pac`). O
+arquivo é baixado e as entradas `PROXY`/`HTTPS`/`SOCKS[5] host:port` que ele
+retorna são extraídas (PAC é JavaScript arbitrário; isso não avalia o script,
+só procura essas diretivas — cobre a grande maioria dos PACs reais).
+
+```
+# Aplica direto aos targets, como "proxy set"
+proxy-helper proxy import http://192.168.111.70/proxy.pac --user vinicius --pass '...'
+
+# Salva como perfil em vez de aplicar
+proxy-helper proxy import http://192.168.111.70/proxy.pac \
+  --user vinicius --pass '...' --save-profile trabalho
+```
+
+`--user`/`--pass` são as credenciais do proxy (não da URL do PAC). Se a
+própria URL do `.pac` exigir autenticação, informe-as na URL:
+`http://user:senha@192.168.111.70/proxy.pac`.
+
+Se o PAC listar mais de um proxy (fallbacks, regras por host), o comando
+mostra as opções encontradas e pede pra escolher uma com `--index N`.
+Aceita os mesmos `--no-proxy`, `--targets` e `--dry-run` de `proxy set`.

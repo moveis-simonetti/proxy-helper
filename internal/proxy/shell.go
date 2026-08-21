@@ -50,6 +50,12 @@ func (t *shellTarget) Set(ex *Executor, cfg Config) error {
 		fmt.Fprintf(&b, "export NO_PROXY=%q\n", np)
 		fmt.Fprintf(&b, "export no_proxy=%q\n", np)
 	}
+	// Node's global fetch ignores the classic variables above: undici only
+	// reads them when this one is set. Without it, every Node CLI that uses
+	// fetch fails with ENETUNREACH while curl and git work fine — a confusing
+	// split that costs real debugging time. Node 24 made it the default;
+	// setting it on older versions is what makes them behave the same.
+	fmt.Fprintln(&b, "export NODE_USE_ENV_PROXY=1")
 
 	files := t.rcFiles()
 	if len(files) == 0 {
@@ -60,7 +66,7 @@ func (t *shellTarget) Set(ex *Executor, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		if err := ex.WriteFile(path, content, 0o644); err != nil {
+		if err := ex.WriteFilePreview(path, content, b.String(), 0o644); err != nil {
 			return err
 		}
 	}
@@ -76,7 +82,7 @@ func (t *shellTarget) Unset(ex *Executor) error {
 		if !found {
 			continue
 		}
-		if err := ex.WriteFile(path, content, 0o644); err != nil {
+		if err := ex.WriteFilePreview(path, content, "(removing the proxy-helper managed block)", 0o644); err != nil {
 			return err
 		}
 	}

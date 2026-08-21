@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"proxy-helper/internal/proxy"
+	"proxy-helper/internal/serve"
 
 	"github.com/spf13/cobra"
 )
@@ -22,6 +23,23 @@ var proxyStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show current proxy configuration across targets",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		pf, err := proxy.LoadProfiles()
+		if err != nil {
+			return err
+		}
+		active := daemonActive()
+		switch {
+		case active && pf.ActiveProfile == "":
+			fmt.Printf("daemon: active, no profile selected (everything goes direct)\n\n")
+		case active:
+			fmt.Printf("daemon: active (profile %q)\n\n", pf.ActiveProfile)
+		case pf.ViaLocal:
+			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run \"systemctl --user start %s\"\n\n",
+				pf.EffectiveLocalPort(), serve.UnitName)
+		default:
+			fmt.Printf("daemon: not in use\n\n")
+		}
+
 		targets, err := proxy.ByNames(statusTargets)
 		if err != nil {
 			return err

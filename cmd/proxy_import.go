@@ -72,7 +72,7 @@ var proxyImportCmd = &cobra.Command{
 			return nil
 		}
 
-		return applyConfig(cfg, importTargets, importDryRun)
+		return applyConfig(cfg, importTargets, importDryRun, false)
 	},
 }
 

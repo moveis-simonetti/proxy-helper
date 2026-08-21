@@ -16,6 +16,31 @@ var proxyProfileCmd = &cobra.Command{
 	Short: "Manage saved proxy profiles",
 }
 
+// refuseReserved blocks the reserved "_current" slot from being managed like
+// a user profile. It belongs to "proxy set --via-local", which rewrites it
+// wholesale, so editing or deleting it by hand only creates confusion.
+func refuseReserved(name, verb string) error {
+	if name != proxy.CurrentProfileName {
+		return nil
+	}
+	return fmt.Errorf("%q is reserved for \"proxy set --via-local\" and cannot be %s; save a named profile instead", name, verb)
+}
+
+// visibleProfileNames returns the profiles a user should see, sorted. The
+// reserved slot is an implementation detail of "proxy set --via-local", not
+// something the user saved, so it stays out of the listing.
+func visibleProfileNames(pf *proxy.ProfileFile) []string {
+	names := make([]string, 0, len(pf.Profiles))
+	for name := range pf.Profiles {
+		if name == proxy.CurrentProfileName {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // --- add ---
 
 var (
@@ -35,6 +60,9 @@ var proxyProfileAddCmd = &cobra.Command{
 		name := args[0]
 		if profileAddHost == "" {
 			return fmt.Errorf("--host is required")
+		}
+		if err := refuseReserved(name, "added"); err != nil {
+			return err
 		}
 
 		pf, err := proxy.LoadProfiles()
@@ -78,6 +106,9 @@ var proxyProfileEditCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
+		if err := refuseReserved(name, "edited"); err != nil {
+			return err
+		}
 
 		pf, err := proxy.LoadProfiles()
 		if err != nil {
@@ -124,6 +155,9 @@ var proxyProfileRemoveCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
+		if err := refuseReserved(name, "removed"); err != nil {
+			return err
+		}
 
 		pf, err := proxy.LoadProfiles()
 		if err != nil {
@@ -134,11 +168,26 @@ var proxyProfileRemoveCmd = &cobra.Command{
 		}
 
 		delete(pf.Profiles, name)
-		if pf.ActiveProfile == name {
+		// Both pointers have to let go of a profile that no longer exists:
+		// a dangling last_profile makes "proxy on" fail with a name the
+		// user can no longer see in "proxy profile list".
+		wasActive := pf.ActiveProfile == name
+		if wasActive {
 			pf.ActiveProfile = ""
+		}
+		if pf.LastProfile == name {
+			pf.LastProfile = ""
 		}
 		if err := pf.Save(); err != nil {
 			return err
+		}
+		// Removing the profile the daemon is serving changes where traffic
+		// goes, so it has to hear about it — otherwise it keeps proxying
+		// through an upstream the user just deleted.
+		if wasActive {
+			if err := reloadDaemon(&proxy.Executor{}); err != nil {
+				return err
+			}
 		}
 		fmt.Printf("profile %q removed\n", name)
 		return nil
@@ -156,11 +205,7 @@ var proxyProfileListCmd = &cobra.Command{
 			return err
 		}
 
-		names := make([]string, 0, len(pf.Profiles))
-		for name := range pf.Profiles {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+		names := visibleProfileNames(pf)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tSCHEME\tHOST\tPORT\tENABLED")
@@ -175,8 +220,9 @@ var proxyProfileListCmd = &cobra.Command{
 // --- enable ---
 
 var (
-	profileEnableTargets []string
-	profileEnableDryRun  bool
+	profileEnableTargets  []string
+	profileEnableDryRun   bool
+	profileEnableViaLocal bool
 )
 
 var proxyProfileEnableCmd = &cobra.Command{
@@ -195,15 +241,51 @@ var proxyProfileEnableCmd = &cobra.Command{
 			return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
 		}
 
-		if err := applyConfig(cfg, profileEnableTargets, profileEnableDryRun); err != nil {
-			return err
+		if profileEnableViaLocal {
+			// Build the plumbing for a *named* profile: active_profile
+			// gets the name (not the reserved "_current" copy, which
+			// would go stale the moment the profile is edited), and the
+			// targets only ever see the loopback address.
+			cfg.NoProxy = proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
+			pf.ActiveProfile = name
+			return applyViaLocal(pf, cfg, profileEnableTargets, profileEnableDryRun)
 		}
-		if profileEnableDryRun {
+
+		if pf.ViaLocal {
+			// The plumbing is already in place: the targets point at the
+			// daemon, so switching profiles is pure state. Touching a
+			// target here would tear the plumbing down and write the
+			// upstream credential into every tool's config file.
+			if profileEnableDryRun {
+				fmt.Printf("would enable profile %q (targets already point at the local proxy; nothing to change there)\n", name)
+				return nil
+			}
+			pf.ActiveProfile = name
+			if err := pf.Save(); err != nil {
+				return err
+			}
+			if err := reloadDaemon(&proxy.Executor{}); err != nil {
+				return err
+			}
+			fmt.Printf("profile %q enabled\n", name)
 			return nil
 		}
 
-		pf.ActiveProfile = name
-		return pf.Save()
+		// Record the activation *before* touching any target. Targets fail
+		// for mundane reasons — a tool with an unparsable config file, a
+		// declined sudo prompt — and returning early used to leave the
+		// machine with every target configured but no active profile: the
+		// partial state this tool exists to prevent.
+		if !profileEnableDryRun {
+			pf.ActiveProfile = name
+			if err := pf.Save(); err != nil {
+				return err
+			}
+			if err := reloadDaemon(&proxy.Executor{}); err != nil {
+				return err
+			}
+		}
+		return applyConfig(cfg, profileEnableTargets, profileEnableDryRun, false)
 	},
 }
 
@@ -237,8 +319,14 @@ var proxyProfileDisableCmd = &cobra.Command{
 			return nil
 		}
 
-		pf.ActiveProfile = ""
-		return pf.Save()
+		// Off, not a bare assignment: it remembers the profile so that
+		// "proxy on" works after a disable exactly as it does after an
+		// "proxy off".
+		pf.Off()
+		if err := pf.Save(); err != nil {
+			return err
+		}
+		return reloadDaemon(&proxy.Executor{})
 	},
 }
 
@@ -259,6 +347,7 @@ func init() {
 
 	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableDryRun, "dry-run", false, "print what would change without applying it")
+	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableViaLocal, "via-local", false, "point targets at the local proxy (see \"proxy serve\") instead of writing the upstream and its credentials into every tool's config")
 
 	proxyProfileDisableCmd.Flags().StringSliceVar(&profileDisableTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyProfileDisableCmd.Flags().BoolVar(&profileDisableDryRun, "dry-run", false, "print what would change without applying it")

@@ -43,23 +43,31 @@ func vscodeSettingsPath(dir string) (string, error) {
 	return filepath.Join(configHome, dir, "User", "settings.json"), nil
 }
 
-// readJSONObject parses a settings.json file. It only understands strict
-// JSON (like the "jq"-based reference implementation this mirrors), so
-// comments/trailing commas some editors tolerate in this file are not
-// preserved across a round trip.
-func readJSONObject(path string) (map[string]interface{}, error) {
-	content, err := os.ReadFile(path)
+// readSettings returns a settings.json file both as raw bytes (for in-place
+// editing) and parsed (for reading values). Editors in this family write JSON
+// with comments, and users hand-edit these files, so comments are tolerated
+// when parsing and preserved when writing.
+func readSettings(path string) (raw []byte, doc map[string]interface{}, err error) {
+	raw, err = os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(content) == 0 {
-		return map[string]interface{}{}, nil
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return []byte("{}\n"), map[string]interface{}{}, nil
 	}
-	var doc map[string]interface{}
-	if err := json.Unmarshal(content, &doc); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	if err := json.Unmarshal(stripJSONC(raw), &doc); err != nil {
+		return nil, nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return doc, nil
+	return raw, doc, nil
+}
+
+// encodeJSON renders a value the way it should appear inside settings.json.
+func encodeJSON(v interface{}) (string, error) {
+	out, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
@@ -73,7 +81,7 @@ func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		doc, err := readJSONObject(path)
+		raw, _, err := readSettings(path)
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -81,19 +89,37 @@ func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
 			return err
 		}
 
-		doc["http.proxy"] = proxyURL
-		doc["http.proxyStrictSSL"] = false
+		// Edit only the proxy keys: the user's comments, key order and
+		// formatting elsewhere in the file must survive untouched.
+		values := []struct {
+			key string
+			val interface{}
+		}{
+			{"http.proxy", proxyURL},
+			{"http.proxyStrictSSL", false},
+		}
+		for _, kv := range values {
+			encoded, err := encodeJSON(kv.val)
+			if err != nil {
+				return err
+			}
+			if raw, err = setJSONCKey(raw, kv.key, encoded); err != nil {
+				return fmt.Errorf("%s: %w", p.name, err)
+			}
+		}
 		if len(cfg.NoProxy) > 0 {
-			doc["http.noProxy"] = cfg.NoProxy
-		} else {
-			delete(doc, "http.noProxy")
+			encoded, err := encodeJSON(cfg.NoProxy)
+			if err != nil {
+				return err
+			}
+			if raw, err = setJSONCKey(raw, "http.noProxy", encoded); err != nil {
+				return fmt.Errorf("%s: %w", p.name, err)
+			}
+		} else if raw, err = removeJSONCKeys(raw, "http.noProxy"); err != nil {
+			return fmt.Errorf("%s: %w", p.name, err)
 		}
 
-		out, err := json.MarshalIndent(doc, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := ex.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		if err := ex.WriteFile(path, raw, 0o644); err != nil {
 			return fmt.Errorf("%s: %w", p.name, err)
 		}
 	}
@@ -106,7 +132,7 @@ func (t *vscodeTarget) Unset(ex *Executor) error {
 		if err != nil {
 			return err
 		}
-		doc, err := readJSONObject(path)
+		raw, doc, err := readSettings(path)
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -117,15 +143,11 @@ func (t *vscodeTarget) Unset(ex *Executor) error {
 			continue
 		}
 
-		delete(doc, "http.proxy")
-		delete(doc, "http.proxyStrictSSL")
-		delete(doc, "http.noProxy")
-
-		out, err := json.MarshalIndent(doc, "", "  ")
+		raw, err = removeJSONCKeys(raw, "http.proxy", "http.proxyStrictSSL", "http.noProxy")
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", p.name, err)
 		}
-		if err := ex.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		if err := ex.WriteFile(path, raw, 0o644); err != nil {
 			return fmt.Errorf("%s: %w", p.name, err)
 		}
 	}
@@ -142,7 +164,7 @@ func (t *vscodeTarget) Status(elevate bool) (Status, error) {
 		if err != nil {
 			return st, err
 		}
-		doc, err := readJSONObject(path)
+		_, doc, err := readSettings(path)
 		if os.IsNotExist(err) {
 			continue
 		}

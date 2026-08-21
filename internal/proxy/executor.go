@@ -128,6 +128,21 @@ func (e *Executor) WriteFile(path string, content []byte, perm os.FileMode) erro
 	return os.WriteFile(path, content, perm)
 }
 
+// WriteFilePreview writes content, but shows only preview in a dry-run.
+//
+// It exists for files the tool edits surgically: printing the whole file, the
+// way WriteFile does, dumps everything the user keeps in it. A shell rc is the
+// worst case — it routinely holds unrelated API tokens, and redactSecrets only
+// masks URL userinfo and JSON secret fields, not "export TOKEN=...". The
+// preview shows the part this tool is responsible for and nothing else.
+func (e *Executor) WriteFilePreview(path string, content []byte, preview string, perm os.FileMode) error {
+	if e.DryRun {
+		fmt.Printf("  [dry-run] would update %s, changing only this block:\n%s\n", path, indent(redactSecrets(preview)))
+		return nil
+	}
+	return e.WriteFile(path, content, perm)
+}
+
 // WritePrivilegedFile writes content to a root-owned path via sudo tee.
 func (e *Executor) WritePrivilegedFile(path string, content []byte, perm os.FileMode) error {
 	if e.DryRun {
@@ -177,3 +192,7 @@ func (e *Executor) RemovePrivilegedFile(path string) error {
 	}
 	return e.RunPrivileged("rm", "-f", path)
 }
+
+// Redact masks credentials in text that is about to be printed. It is
+// exported so the log renderer can apply the same rules as dry-run previews.
+func Redact(s string) string { return redactSecrets(s) }

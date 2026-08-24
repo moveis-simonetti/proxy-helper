@@ -12,15 +12,16 @@ import (
 // fakeTarget records the Configs it receives instead of touching the
 // developer's real ~/.gitconfig or /etc/apt.
 type fakeTarget struct {
-	name        string
-	root        bool
-	available   bool
-	setCfgs     []proxy.Config
-	unsets      int
-	setErr      error
-	unsetErr    error
-	statusErr   error
-	statusCalls int
+	name          string
+	root          bool
+	sessionScoped bool
+	available     bool
+	setCfgs       []proxy.Config
+	unsets        int
+	setErr        error
+	unsetErr      error
+	statusErr     error
+	statusCalls   int
 	// statusDetail, when set, is returned as Status.Detail — mirroring the
 	// reason a real target like kde/lxd/snap gives for being unavailable.
 	statusDetail string
@@ -30,9 +31,10 @@ type fakeTarget struct {
 	trace *[]string
 }
 
-func (f *fakeTarget) Name() string       { return f.name }
-func (f *fakeTarget) RequiresRoot() bool { return f.root }
-func (f *fakeTarget) Available() bool    { return f.available }
+func (f *fakeTarget) Name() string        { return f.name }
+func (f *fakeTarget) RequiresRoot() bool  { return f.root }
+func (f *fakeTarget) SessionScoped() bool { return f.sessionScoped }
+func (f *fakeTarget) Available() bool     { return f.available }
 
 func (f *fakeTarget) Set(ex *proxy.Executor, cfg proxy.Config) error {
 	f.setCfgs = append(f.setCfgs, cfg)
@@ -301,5 +303,86 @@ func TestSkippedResultCarriesTheReason(t *testing.T) {
 	}
 	if rep.Results[0].Detail != "kwriteconfig not found" {
 		t.Errorf("a skipped target must say why, got %q", rep.Results[0].Detail)
+	}
+}
+
+// TestSetNeverWarnsAboutSudoForSessionScopedTarget covers the fix for the
+// GUI showing "gnome precisa de sudo" on a run that never actually
+// prompted: gnome.RequiresRoot() is true only because of its Unset-only
+// PackageKit workaround, so a session-scoped target's Set must never raise
+// NoticeNeedsSudo even when RequiresRoot() reports true.
+func TestSetNeverWarnsAboutSudoForSessionScopedTarget(t *testing.T) {
+	if proxy.IsRoot() {
+		t.Skip("the sudo notice is only raised for a non-root process")
+	}
+	isolateConfig(t, `{"profiles":{}}`)
+	gnome := &fakeTarget{name: "gnome", available: true, root: true, sessionScoped: true}
+
+	var notices []Notice
+	d := depsFor(gnome)
+	d.Notify = func(n Notice) { notices = append(notices, n) }
+
+	if _, err := Apply(d, &proxy.Executor{}, proxy.Config{Host: "p", Port: "1"}, []string{"gnome"}, false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for _, n := range notices {
+		if n.Kind == NoticeNeedsSudo {
+			t.Errorf("Set on a session-scoped target must never raise NoticeNeedsSudo, got %+v", n)
+		}
+	}
+}
+
+// TestClearStillWarnsAboutSudoForSessionScopedTarget is the CLI-sensibility
+// half of the same fix: unlike Set, gnome's Unset genuinely may need sudo
+// for the PackageKit workaround, so "proxy unset --targets gnome" from a
+// plain (non-EscalateNone) CLI invocation must keep the notice.
+func TestClearStillWarnsAboutSudoForSessionScopedTarget(t *testing.T) {
+	if proxy.IsRoot() {
+		t.Skip("the sudo notice is only raised for a non-root process")
+	}
+	isolateConfig(t, `{"profiles":{}}`)
+	gnome := &fakeTarget{name: "gnome", available: true, root: true, sessionScoped: true}
+
+	var notices []Notice
+	d := depsFor(gnome)
+	d.Notify = func(n Notice) { notices = append(notices, n) }
+
+	if _, err := Clear(d, &proxy.Executor{}, []string{"gnome"}); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	found := false
+	for _, n := range notices {
+		if n.Kind == NoticeNeedsSudo && n.Target == "gnome" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Unset on a session-scoped target whose workaround genuinely needs root must still raise NoticeNeedsSudo")
+	}
+}
+
+// TestEscalateNoneNeverWarnsAboutSudo covers the GUI's in-process executor
+// (Escalation: EscalateNone): it refuses to elevate outright (see
+// Executor's doc comment), so no password prompt can ever appear — warning
+// about one would be false regardless of RequiresRoot or SessionScoped.
+func TestEscalateNoneNeverWarnsAboutSudo(t *testing.T) {
+	if proxy.IsRoot() {
+		t.Skip("the sudo notice is only raised for a non-root process")
+	}
+	isolateConfig(t, `{"profiles":{}}`)
+	apt := &fakeTarget{name: "apt", available: true, root: true}
+
+	var notices []Notice
+	d := depsFor(apt)
+	d.Notify = func(n Notice) { notices = append(notices, n) }
+
+	ex := &proxy.Executor{Escalation: proxy.EscalateNone}
+	if _, err := Apply(d, ex, proxy.Config{Host: "p", Port: "1"}, []string{"apt"}, false); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for _, n := range notices {
+		if n.Kind == NoticeNeedsSudo {
+			t.Errorf("EscalateNone must never raise NoticeNeedsSudo, got %+v", n)
+		}
 	}
 }

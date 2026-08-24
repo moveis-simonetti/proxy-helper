@@ -94,8 +94,8 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	if err != nil {
 		return nil, err
 	}
-	grid.SetRowSpacing(6)
-	grid.SetColumnSpacing(12)
+	grid.SetRowSpacing(spaceTight)
+	grid.SetColumnSpacing(spaceRelated)
 
 	headers := []string{"", "", "Target", "Estado", "Detalhe"}
 	for col, text := range headers {
@@ -136,10 +136,11 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	}
 	win.StatusPage.PackStart(sep, false, false, 0)
 
-	footer, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 12)
+	footer, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceRelated)
 	if err != nil {
 		return nil, err
 	}
+	footer.SetMarginTop(spaceRelated)
 
 	viaLocal, err := gtk.CheckButtonNew()
 	if err != nil {
@@ -160,6 +161,16 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	footer.PackStart(summary, true, true, 0)
 	sp.summary = summary
 
+	// The two reload buttons share one small Box so they read as a group
+	// ("reload, plain or with sudo") instead of two unrelated, seemingly
+	// duplicate buttons. Grouping is the only change here — neither button's
+	// own behaviour or visibility handling moves.
+	reloadBox, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
+	if err != nil {
+		return nil, err
+	}
+	reloadBox.SetSpacing(spaceTight)
+
 	// Plain reload: always visible, independent of whether any target needs
 	// elevation. Without it, a Collect error (applyStatuses paints every row
 	// "erro" and disables every checkbox and button) has no way back short
@@ -170,7 +181,7 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		return nil, err
 	}
 	plainReloadBtn.Connect("clicked", func() { sp.load() })
-	footer.PackStart(plainReloadBtn, false, false, 0)
+	reloadBox.PackStart(plainReloadBtn, false, false, 0)
 	sp.plainReloadBtn = plainReloadBtn
 
 	reloadBtn, err := gtk.ButtonNewWithLabel("Recarregar com sudo")
@@ -181,26 +192,35 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	// elevation, which happens asynchronously after the first load. Hidden
 	// at construction time; setNoShowAll keeps a later ShowAll() on the
 	// window from reasserting visibility before that first result lands.
+	// Packing it into reloadBox does not affect this: NoShowAll is a
+	// per-widget flag GTK checks on the widget itself when ShowAllRecursive
+	// walks the container, not something the parent Box can override.
 	reloadBtn.SetNoShowAll(true)
 	reloadBtn.SetVisible(false)
 	reloadBtn.Connect("clicked", func() { sp.reloadWithSudo() })
-	footer.PackStart(reloadBtn, false, false, 0)
+	reloadBox.PackStart(reloadBtn, false, false, 0)
 	sp.reloadBtn = reloadBtn
+
+	footer.PackStart(reloadBox, false, false, 0)
 
 	win.StatusPage.PackStart(footer, false, false, 0)
 
-	actions, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 12)
+	actions, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
 	if err != nil {
 		return nil, err
 	}
+	actions.SetMarginTop(spaceRelated)
+	actions.SetHAlign(gtk.ALIGN_END)
+	actions.SetSpacing(spaceTight)
 
-	applyBtn, err := gtk.ButtonNewWithLabel("Aplicar")
+	resultLbl, err := gtk.LabelNew("")
 	if err != nil {
 		return nil, err
 	}
-	applyBtn.Connect("clicked", func() { sp.apply() })
-	actions.PackStart(applyBtn, false, false, 0)
-	sp.applyBtn = applyBtn
+	resultLbl.SetXAlign(0)
+	resultLbl.SetLineWrap(true)
+	actions.PackStart(resultLbl, true, true, 0)
+	sp.resultLbl = resultLbl
 
 	clearBtn, err := gtk.ButtonNewWithLabel("Remover")
 	if err != nil {
@@ -218,14 +238,13 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	actions.PackStart(simulateBtn, false, false, 0)
 	sp.simulateBtn = simulateBtn
 
-	resultLbl, err := gtk.LabelNew("")
+	applyBtn, err := gtk.ButtonNewWithLabel("Aplicar")
 	if err != nil {
 		return nil, err
 	}
-	resultLbl.SetXAlign(0)
-	resultLbl.SetLineWrap(true)
-	actions.PackStart(resultLbl, true, true, 0)
-	sp.resultLbl = resultLbl
+	applyBtn.Connect("clicked", func() { sp.apply() })
+	actions.PackStart(applyBtn, false, false, 0)
+	sp.applyBtn = applyBtn
 
 	win.StatusPage.PackStart(actions, false, false, 0)
 
@@ -520,7 +539,7 @@ func (sp *statusPage) showResult(msg string) {
 // single target's real failure as if every target had failed. The CLI's
 // own per-target table (out) is captured by runCmd; the caller shows it in
 // the result dialog so the user reads the real per-target outcome instead.
-func (sp *statusPage) applyPrivileged(profile string, targets []string) (summary, cliOutput string) {
+func applyPrivileged(profile string, targets []string) (summary, cliOutput string) {
 	binary, err := findCLIBinary()
 	if err != nil {
 		return fmt.Sprintf("privilegiados não aplicados: %s", err), ""
@@ -601,7 +620,7 @@ func (sp *statusPage) applyPrivilegedViaLocal(port int, noProxy, targets []strin
 // pkexec call, but reinvoking "proxy unset" instead of "proxy set", since
 // clearing never needs a profile. See applyPrivileged's doc comment for why
 // the summary never claims a count of "N removidos".
-func (sp *statusPage) clearPrivileged(targets []string) (summary, cliOutput string) {
+func clearPrivileged(targets []string) (summary, cliOutput string) {
 	binary, err := findCLIBinary()
 	if err != nil {
 		return fmt.Sprintf("privilegiados não removidos: %s", err), ""
@@ -623,6 +642,17 @@ func (sp *statusPage) clearPrivileged(targets []string) (summary, cliOutput stri
 // through the single pkexec call in applyPrivileged. Runs off the UI
 // thread via the runner; reloads the table afterwards so the grid reflects
 // what actually happened rather than what was merely attempted.
+//
+// This is a two-stage submit, not one job. "Via daemon local" plus a
+// privileged dockerd needs a heads-up, before anything runs, that it takes
+// two separate pkexec calls (see twoDialogsWarning's doc comment) — but
+// deciding that needs LoadProfiles, which is file I/O and so cannot run on
+// the UI thread (the earlier version did, and that is finding 1 this
+// replaced). The first job below does only that read, off the UI thread;
+// the closure it returns runs on the UI thread, shows the warning if
+// needed, and only then submits the second job — runApply — which does the
+// actual work. Because the runner processes one job at a time, that warning
+// is guaranteed to land before runApply's pkexec call ever prompts.
 func (sp *statusPage) apply() {
 	user, privileged := sp.selectedNames()
 	// Read on the UI thread, right next to the selection: the job body
@@ -636,35 +666,47 @@ func (sp *statusPage) apply() {
 		return
 	}
 
-	// "Via daemon local" plus privileged targets used to be refused outright
-	// here: pkexec runs the reinvoked CLI as root with no XDG_RUNTIME_DIR
-	// and no user systemd manager, so its DaemonActive() check always
-	// reported the daemon as stopped even when it was running, and
-	// app.Apply failed every privileged target with a message that was
-	// simply false (see elevateCmd's doc comment). The fix is to never pass
-	// --via-local into the elevated CLI at all: applyPrivilegedViaLocal
-	// resolves the loopback/bridge address itself and passes it as an
-	// explicit --host, which needs neither DaemonActive() nor a profile
-	// lookup. That address carries no credentials (proxy.TargetConfig
-	// strips them for every --via-local target), so passing it as a
-	// command-line flag does not leak a password to `ps` the way --pass
-	// would.
-	//
-	// One combination still needs a heads-up before anything runs: Docker
-	// bridge enabled and dockerd among the selected privileged targets
-	// means two separate pkexec calls (dockerd needs the bridge address,
-	// the rest need loopback — see elevateViaLocalCmds), i.e. two polkit
-	// password prompts. Warn about that now, synchronously, before
-	// submitting the job: LoadProfiles here is a quick local read used only
-	// to decide whether to warn, not the authoritative one — the job below
-	// reloads it itself. A failure here just means no warning, not a
-	// blocked apply.
-	if viaLocal && len(privileged) > 0 {
-		if pf, err := proxy.LoadProfiles(); err == nil && needsTwoElevatedCalls(privileged, pf.DockerBridge) {
-			sp.showResult(twoDialogsWarning)
+	sp.runner.submit(func() func() {
+		// "Via daemon local" plus privileged targets used to be refused
+		// outright here: pkexec runs the reinvoked CLI as root with no
+		// XDG_RUNTIME_DIR and no user systemd manager, so its DaemonActive()
+		// check always reported the daemon as stopped even when it was
+		// running, and app.Apply failed every privileged target with a
+		// message that was simply false (see elevateCmd's doc comment). The
+		// fix is to never pass --via-local into the elevated CLI at all:
+		// applyPrivilegedViaLocal resolves the loopback/bridge address
+		// itself and passes it as an explicit --host, which needs neither
+		// DaemonActive() nor a profile lookup. That address carries no
+		// credentials (proxy.TargetConfig strips them for every --via-local
+		// target), so passing it as a command-line flag does not leak a
+		// password to `ps` the way --pass would.
+		//
+		// LoadProfiles here is a quick read used only to decide whether to
+		// warn about the two-pkexec-calls case, not the authoritative one —
+		// runApply reloads it itself. A failure here just means no warning,
+		// not a blocked apply.
+		warnTwoDialogs := false
+		if viaLocal && len(privileged) > 0 {
+			if pf, err := proxy.LoadProfiles(); err == nil && needsTwoElevatedCalls(privileged, pf.DockerBridge) {
+				warnTwoDialogs = true
+			}
 		}
-	}
 
+		return func() {
+			if warnTwoDialogs {
+				sp.showResult(twoDialogsWarning)
+			}
+			sp.runApply(user, privileged, viaLocal)
+		}
+	})
+}
+
+// runApply submits the job that actually applies the selection: the
+// user-level targets in-process, the privileged ones through the single
+// pkexec call in applyPrivileged/applyPrivilegedViaLocal. Called on the UI
+// thread only, from the closure apply()'s first-stage job returns — see
+// apply's doc comment for why the warning has to land before this submits.
+func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
 	sp.runner.submit(func() func() {
 		profile, cfg, pf, err := activeProfile()
 		if err != nil {
@@ -685,7 +727,7 @@ func (sp *statusPage) apply() {
 				mergedNoProxy := proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
 				privMsg, privOut = sp.applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
 			} else {
-				privMsg, privOut = sp.applyPrivileged(profile, privileged)
+				privMsg, privOut = applyPrivileged(profile, privileged)
 			}
 		}
 
@@ -727,7 +769,7 @@ func (sp *statusPage) clear() {
 
 		var privMsg, privOut string
 		if len(privileged) > 0 {
-			privMsg, privOut = sp.clearPrivileged(privileged)
+			privMsg, privOut = clearPrivileged(privileged)
 		}
 
 		return func() {

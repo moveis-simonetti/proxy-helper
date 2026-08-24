@@ -101,3 +101,40 @@ func TestSelectsAllTargets(t *testing.T) {
 		t.Error("naming every target must count as a full selection")
 	}
 }
+
+func TestSelectsAllAvailableTargets(t *testing.T) {
+	if !SelectsAllAvailableTargets([]string{"all"}) {
+		t.Error(`"all" must count as a full selection of available targets`)
+	}
+	if SelectsAllAvailableTargets([]string{"nonsense"}) {
+		t.Error("an unresolvable list must not count as a full selection")
+	}
+
+	var every, available []string
+	for _, target := range AllTargets() {
+		every = append(every, target.Name())
+		if target.Available() {
+			available = append(available, target.Name())
+		}
+	}
+
+	// Naming every registered target (available or not) is a superset of
+	// the available ones, so it must still count as full.
+	if !SelectsAllAvailableTargets(every) {
+		t.Error("naming every target must count as a full selection")
+	}
+
+	// This is the case SelectsAllTargets gets wrong for a caller like the
+	// GUI: naming only the available targets, with no unavailable one
+	// listed, must still count as full.
+	if !SelectsAllAvailableTargets(available) {
+		t.Error("naming every available target must count as a full selection")
+	}
+
+	if len(available) > 1 {
+		partial := available[:len(available)-1]
+		if SelectsAllAvailableTargets(partial) {
+			t.Error("a partial list of available targets must not count as a full selection")
+		}
+	}
+}

@@ -157,7 +157,7 @@ func splitSessionAware(targets []selectedTargetInfo) (user, privileged []string)
 
 // splitDockerTargets separates the targets that read their proxy settings
 // from inside a container (serve.IsDockerTarget) from the rest. This reuses
-// exactly the rule cmd/proxy.go's applyViaLocal uses for the same split,
+// exactly the rule internal/app.ApplyViaLocal uses for the same split,
 // rather than inventing a second one.
 func splitDockerTargets(targets []string) (docker, other []string) {
 	for _, name := range targets {

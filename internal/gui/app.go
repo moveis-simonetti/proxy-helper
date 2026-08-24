@@ -79,9 +79,28 @@ func Run() error {
 		}
 	})
 
-	if _, err := setupStatusPage(win, jobRunner); err != nil {
+	statusPg, err := setupStatusPage(win, jobRunner)
+	if err != nil {
 		return err
 	}
+
+	profilesPg, err := setupProfilesPage(win, jobRunner)
+	if err != nil {
+		return err
+	}
+
+	headerbar, err := setupHeaderbar(win, jobRunner)
+	if err != nil {
+		return err
+	}
+	// Wired here, not inside setupHeaderbar/setupProfilesPage themselves:
+	// app.go is the one place that has all three pages in hand at once.
+	// Switching profile via the selector must refresh what the Status page
+	// shows; saving/removing a profile on the Perfis page must refresh what
+	// the selector offers.
+	headerbar.onProfileChanged = statusPg.load
+	profilesPg.onProfilesChanged = headerbar.refresh
+	headerbar.refresh()
 
 	win.Window.ShowAll()
 	gtk.Main()

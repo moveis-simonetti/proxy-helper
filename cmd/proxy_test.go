@@ -39,7 +39,7 @@ func (f *fakeTarget) Unset(ex *proxy.Executor) error {
 	return nil
 }
 
-func (f *fakeTarget) Status(bool) (proxy.Status, error) {
+func (f *fakeTarget) Status(ex *proxy.Executor, elevate bool) (proxy.Status, error) {
 	return proxy.Status{Name: f.name, Available: true}, nil
 }
 
@@ -492,10 +492,12 @@ func TestDockerTargetsGetABridgeAddress(t *testing.T) {
 	resetProfileFlags(t)
 	profileEnableViaLocal = true
 
-	bridge, err := serve.DockerBridgeAddr()
-	if err != nil {
-		t.Skipf("no docker bridge on this machine: %v", err)
-	}
+	// bridgeAddr is a seam (see deps() in cmd/proxy.go) precisely so this
+	// test does not depend on the machine actually having a Docker bridge.
+	const bridge = "172.17.0.1"
+	origBridgeAddr := bridgeAddr
+	bridgeAddr = func() (string, error) { return bridge, nil }
+	t.Cleanup(func() { bridgeAddr = origBridgeAddr })
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
 		t.Fatalf("profile enable --via-local: %v", err)

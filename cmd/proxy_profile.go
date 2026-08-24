@@ -65,23 +65,21 @@ var proxyProfileAddCmd = &cobra.Command{
 			return err
 		}
 
-		pf, err := proxy.LoadProfiles()
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			if _, exists := pf.Get(name); exists {
+				return fmt.Errorf("profile %q already exists (use \"proxy profile edit\" to change it)", name)
+			}
+			pf.Profiles[name] = proxy.Config{
+				Scheme:   profileAddScheme,
+				Host:     profileAddHost,
+				Port:     profileAddPort,
+				Username: profileAddUser,
+				Password: profileAddPass,
+				NoProxy:  profileAddNoProxy,
+			}
+			return nil
+		})
 		if err != nil {
-			return err
-		}
-		if _, exists := pf.Get(name); exists {
-			return fmt.Errorf("profile %q already exists (use \"proxy profile edit\" to change it)", name)
-		}
-
-		pf.Profiles[name] = proxy.Config{
-			Scheme:   profileAddScheme,
-			Host:     profileAddHost,
-			Port:     profileAddPort,
-			Username: profileAddUser,
-			Password: profileAddPass,
-			NoProxy:  profileAddNoProxy,
-		}
-		if err := pf.Save(); err != nil {
 			return err
 		}
 		fmt.Printf("profile %q saved\n", name)
@@ -110,36 +108,35 @@ var proxyProfileEditCmd = &cobra.Command{
 			return err
 		}
 
-		pf, err := proxy.LoadProfiles()
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			cfg, exists := pf.Get(name)
+			if !exists {
+				return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
+			}
+
+			if cmd.Flags().Changed("scheme") {
+				cfg.Scheme = profileEditScheme
+			}
+			if cmd.Flags().Changed("host") {
+				cfg.Host = profileEditHost
+			}
+			if cmd.Flags().Changed("port") {
+				cfg.Port = profileEditPort
+			}
+			if cmd.Flags().Changed("user") {
+				cfg.Username = profileEditUser
+			}
+			if cmd.Flags().Changed("pass") {
+				cfg.Password = profileEditPass
+			}
+			if cmd.Flags().Changed("no-proxy") {
+				cfg.NoProxy = profileEditNoProxy
+			}
+
+			pf.Profiles[name] = cfg
+			return nil
+		})
 		if err != nil {
-			return err
-		}
-		cfg, exists := pf.Get(name)
-		if !exists {
-			return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
-		}
-
-		if cmd.Flags().Changed("scheme") {
-			cfg.Scheme = profileEditScheme
-		}
-		if cmd.Flags().Changed("host") {
-			cfg.Host = profileEditHost
-		}
-		if cmd.Flags().Changed("port") {
-			cfg.Port = profileEditPort
-		}
-		if cmd.Flags().Changed("user") {
-			cfg.Username = profileEditUser
-		}
-		if cmd.Flags().Changed("pass") {
-			cfg.Password = profileEditPass
-		}
-		if cmd.Flags().Changed("no-proxy") {
-			cfg.NoProxy = profileEditNoProxy
-		}
-
-		pf.Profiles[name] = cfg
-		if err := pf.Save(); err != nil {
 			return err
 		}
 		fmt.Printf("profile %q updated\n", name)
@@ -159,31 +156,33 @@ var proxyProfileRemoveCmd = &cobra.Command{
 			return err
 		}
 
-		pf, err := proxy.LoadProfiles()
-		if err != nil {
-			return err
-		}
-		if _, exists := pf.Get(name); !exists {
-			return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
-		}
+		var wasActive bool
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			if _, exists := pf.Get(name); !exists {
+				return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
+			}
 
-		delete(pf.Profiles, name)
-		// Both pointers have to let go of a profile that no longer exists:
-		// a dangling last_profile makes "proxy on" fail with a name the
-		// user can no longer see in "proxy profile list".
-		wasActive := pf.ActiveProfile == name
-		if wasActive {
-			pf.ActiveProfile = ""
-		}
-		if pf.LastProfile == name {
-			pf.LastProfile = ""
-		}
-		if err := pf.Save(); err != nil {
+			delete(pf.Profiles, name)
+			// Both pointers have to let go of a profile that no longer
+			// exists: a dangling last_profile makes "proxy on" fail with a
+			// name the user can no longer see in "proxy profile list".
+			wasActive = pf.ActiveProfile == name
+			if wasActive {
+				pf.ActiveProfile = ""
+			}
+			if pf.LastProfile == name {
+				pf.LastProfile = ""
+			}
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 		// Removing the profile the daemon is serving changes where traffic
 		// goes, so it has to hear about it — otherwise it keeps proxying
-		// through an upstream the user just deleted.
+		// through an upstream the user just deleted. This runs after the
+		// lock above is released: reloadDaemon never touches the profile
+		// file, so there is nothing to nest.
 		if wasActive {
 			if err := reloadDaemon(&proxy.Executor{}); err != nil {
 				return err
@@ -260,8 +259,10 @@ var proxyProfileEnableCmd = &cobra.Command{
 				fmt.Printf("would enable profile %q (targets already point at the local proxy; nothing to change there)\n", name)
 				return nil
 			}
-			pf.ActiveProfile = name
-			if err := pf.Save(); err != nil {
+			if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+				lpf.ActiveProfile = name
+				return nil
+			}); err != nil {
 				return err
 			}
 			if err := reloadDaemon(&proxy.Executor{}); err != nil {
@@ -277,14 +278,19 @@ var proxyProfileEnableCmd = &cobra.Command{
 		// machine with every target configured but no active profile: the
 		// partial state this tool exists to prevent.
 		if !profileEnableDryRun {
-			pf.ActiveProfile = name
-			if err := pf.Save(); err != nil {
+			if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+				lpf.ActiveProfile = name
+				return nil
+			}); err != nil {
 				return err
 			}
 			if err := reloadDaemon(&proxy.Executor{}); err != nil {
 				return err
 			}
 		}
+		// applyConfig runs after the lock above is released — it (via
+		// internal/app.Apply) may itself take the profile lock, and flock
+		// does not nest within a process.
 		return applyConfig(cfg, profileEnableTargets, profileEnableDryRun, false)
 	},
 }
@@ -312,6 +318,9 @@ var proxyProfileDisableCmd = &cobra.Command{
 			return fmt.Errorf("profile %q is not the active one (active: %q)", args[0], pf.ActiveProfile)
 		}
 
+		// clearTargets runs, and finishes, before the lock below is taken:
+		// it (via internal/app.Clear) may itself take the profile lock, and
+		// flock does not nest within a process.
 		if err := clearTargets(profileDisableTargets, profileDisableDryRun); err != nil {
 			return err
 		}
@@ -322,8 +331,10 @@ var proxyProfileDisableCmd = &cobra.Command{
 		// Off, not a bare assignment: it remembers the profile so that
 		// "proxy on" works after a disable exactly as it does after an
 		// "proxy off".
-		pf.Off()
-		if err := pf.Save(); err != nil {
+		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+			lpf.Off()
+			return nil
+		}); err != nil {
 			return err
 		}
 		return reloadDaemon(&proxy.Executor{})

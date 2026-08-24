@@ -37,15 +37,16 @@ var proxyConfigSetCmd = &cobra.Command{
 			return fmt.Errorf("nothing to set (see --no-proxy)")
 		}
 
-		pf, err := proxy.LoadProfiles()
+		var effective []string
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			pf.GlobalNoProxy = configSetNoProxy
+			effective = pf.EffectiveGlobalNoProxy()
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		pf.GlobalNoProxy = configSetNoProxy
-		if err := pf.Save(); err != nil {
-			return err
-		}
-		fmt.Printf("no-proxy: %s\n", strings.Join(pf.EffectiveGlobalNoProxy(), ","))
+		fmt.Printf("no-proxy: %s\n", strings.Join(effective, ","))
 		return nil
 	},
 }
@@ -54,15 +55,16 @@ var proxyConfigResetNoProxyCmd = &cobra.Command{
 	Use:   "reset-no-proxy",
 	Short: "Reset the global no-proxy list to its default",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pf, err := proxy.LoadProfiles()
+		var effective []string
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			pf.GlobalNoProxy = nil
+			effective = pf.EffectiveGlobalNoProxy()
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		pf.GlobalNoProxy = nil
-		if err := pf.Save(); err != nil {
-			return err
-		}
-		fmt.Printf("no-proxy: %s\n", strings.Join(pf.EffectiveGlobalNoProxy(), ","))
+		fmt.Printf("no-proxy: %s\n", strings.Join(effective, ","))
 		return nil
 	},
 }

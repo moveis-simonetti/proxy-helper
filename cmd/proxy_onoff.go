@@ -15,22 +15,28 @@ var proxyOffCmd = &cobra.Command{
 		"direct. Targets keep pointing at the local proxy, so this needs no " +
 		"sudo and takes effect immediately. Use \"proxy on\" to go back.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pf, err := proxy.LoadProfiles()
+		var lastProfile string
+		wasOn := false
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			if pf.ActiveProfile == "" {
+				return nil
+			}
+			pf.Off()
+			lastProfile = pf.LastProfile
+			wasOn = true
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		if pf.ActiveProfile == "" {
+		if !wasOn {
 			fmt.Println("already off")
 			return nil
-		}
-		pf.Off()
-		if err := pf.Save(); err != nil {
-			return err
 		}
 		if err := reloadDaemon(&proxy.Executor{}); err != nil {
 			return err
 		}
-		fmt.Printf("off (was %q); traffic now goes direct\n", pf.LastProfile)
+		fmt.Printf("off (was %q); traffic now goes direct\n", lastProfile)
 		return nil
 	},
 }
@@ -40,24 +46,25 @@ var proxyOnCmd = &cobra.Command{
 	Short: "Restore proxying through the last profile, or a named one",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pf, err := proxy.LoadProfiles()
-		if err != nil {
-			return err
-		}
 		var name string
 		if len(args) == 1 {
 			name = args[0]
 		}
-		if err := pf.On(name); err != nil {
-			return err
-		}
-		if err := pf.Save(); err != nil {
+		var activeProfile string
+		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			if err := pf.On(name); err != nil {
+				return err
+			}
+			activeProfile = pf.ActiveProfile
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 		if err := reloadDaemon(&proxy.Executor{}); err != nil {
 			return err
 		}
-		fmt.Printf("on (profile %q)\n", pf.ActiveProfile)
+		fmt.Printf("on (profile %q)\n", activeProfile)
 		return nil
 	},
 }

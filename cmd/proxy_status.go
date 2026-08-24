@@ -7,6 +7,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
 	"proxy-helper/internal/serve"
 
@@ -40,36 +41,23 @@ var proxyStatusCmd = &cobra.Command{
 			fmt.Printf("daemon: not in use\n\n")
 		}
 
-		targets, err := proxy.ByNames(statusTargets)
+		ex := &proxy.Executor{}
+		results, err := app.Collect(deps(), ex, statusTargets, false)
 		if err != nil {
 			return err
 		}
 
-		results := make([]proxy.Status, len(targets))
-		var needsElevation []int
-		for i, t := range targets {
-			st, err := t.Status(false)
-			if err != nil {
-				st = proxy.Status{Name: t.Name(), Detail: fmt.Sprintf("error: %v", err)}
-			}
-			results[i] = st
-			if st.NeedsElevation {
-				needsElevation = append(needsElevation, i)
-			}
-		}
-
-		if len(needsElevation) > 0 && !proxy.IsRoot() && !statusNoSudo {
-			names := make([]string, len(needsElevation))
-			for j, i := range needsElevation {
-				names[j] = targets[i].Name()
+		if app.NeedsElevation(results) && !proxy.IsRoot() && !statusNoSudo {
+			var names []string
+			for _, st := range results {
+				if st.NeedsElevation {
+					names = append(names, st.Name)
+				}
 			}
 			if statusYes || confirmSudo(names) {
-				for _, i := range needsElevation {
-					st, err := targets[i].Status(true)
-					if err != nil {
-						st = proxy.Status{Name: targets[i].Name(), Detail: fmt.Sprintf("error: %v", err)}
-					}
-					results[i] = st
+				results, err = app.Elevate(deps(), ex, results)
+				if err != nil {
+					return err
 				}
 			}
 		}

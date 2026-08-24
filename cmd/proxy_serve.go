@@ -133,10 +133,17 @@ var proxyServeInstallCmd = &cobra.Command{
 			return err
 		}
 		if pf.LocalPort != servePort && !serveInstallDry {
-			pf.LocalPort = servePort
-			if err := pf.Save(); err != nil {
+			// Locked, not a bare pf.Save(): the GUI can be installing (or
+			// reinstalling) the daemon at the same moment a CLI run edits
+			// the profile file, and this port is what every --via-local
+			// target and "proxy status" trust.
+			if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+				lpf.LocalPort = servePort
+				return nil
+			}); err != nil {
 				return err
 			}
+			pf.LocalPort = servePort
 		}
 
 		ex := &proxy.Executor{DryRun: serveInstallDry}
@@ -145,10 +152,13 @@ var proxyServeInstallCmd = &cobra.Command{
 				return fmt.Errorf("--docker-bridge: %w", err)
 			}
 			if pf.DockerBridge != true && !serveInstallDry {
-				pf.DockerBridge = true
-				if err := pf.Save(); err != nil {
+				if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+					lpf.DockerBridge = true
+					return nil
+				}); err != nil {
 					return err
 				}
+				pf.DockerBridge = true
 			}
 		}
 		if err := serve.InstallUnit(ex, execPath, servePort, serveDockerBridge || pf.DockerBridge); err != nil {

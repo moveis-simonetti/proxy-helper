@@ -52,6 +52,22 @@ Alternativamente, para compilar a partir do código-fonte (requer Go, veja a ver
 go build -o proxy-helper .
 ```
 
+Esse build gera o binário de linha de comando (`proxy-helper`), sem a interface
+gráfica. Para compilar também a interface gráfica (GTK3), use a build tag `gui`:
+
+```
+go build -tags gui -o proxy-helper-gui .
+```
+
+O binário `proxy-helper-gui` inclui os mesmos comandos do `proxy-helper`, mais
+o comando `gui`. Ele exige `cgo` habilitado e os headers de desenvolvimento do
+GTK3 para compilar, e a biblioteca `libgtk-3-0` (ou equivalente) instalada em
+tempo de execução — só nesse binário; o `proxy-helper` sem a tag `gui` não tem
+essa dependência. A dependência `gotk3` está fixada numa pseudo-versão do
+`master` (não na última tag), porque a tag `v0.6.4` não compila com a
+toolchain deste projeto — não rode `go get -u` nela sem antes confirmar que a
+versão nova compila.
+
 ## Targets
 
 Todo comando que mexe em configurações de proxy aceita `--targets`, uma lista

@@ -75,7 +75,14 @@ func Apply(d Deps, ex *proxy.Executor, cfg proxy.Config, targetNames []string, v
 	// covers every target. A partial set (say, just the Docker ones) leaves
 	// the rest plumbed, and clearing the flag there would silence the warning
 	// that those targets depend on a daemon that may not be running.
-	if !ex.DryRun && proxy.SelectsAllTargets(targetNames) {
+	//
+	// SelectsAllAvailableTargets, not SelectsAllTargets: an unavailable
+	// target was never plumbed (eachTarget skips it outright), so it should
+	// not have to be named for this to count as complete. A caller that only
+	// ever offers the targets a user could actually select — the GUI, which
+	// sends explicit names and never "all" — would otherwise never satisfy
+	// SelectsAllTargets, since unavailable targets never turn up unchecked.
+	if !ex.DryRun && proxy.SelectsAllAvailableTargets(targetNames) {
 		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
 			lpf.ViaLocal = false
 			return nil
@@ -215,7 +222,10 @@ func Clear(d Deps, ex *proxy.Executor, targetNames []string) (*Report, error) {
 
 	// Only a full unset can honestly say the plumbing is gone. Clearing one
 	// target still leaves the others pointing at the loopback.
-	if !ex.DryRun && proxy.SelectsAllTargets(targetNames) {
+	//
+	// SelectsAllAvailableTargets, not SelectsAllTargets: see Apply's
+	// equivalent comment above.
+	if !ex.DryRun && proxy.SelectsAllAvailableTargets(targetNames) {
 		if err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
 			pf.ViaLocal = false
 			return nil

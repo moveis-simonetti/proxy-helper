@@ -29,6 +29,11 @@ type fakeTarget struct {
 	// ordering against something else appended to the same slice (e.g. a
 	// Notify callback).
 	trace *[]string
+	// onSet, when set, runs at the very start of Set — before setErr is
+	// returned — so a test can observe state that only matters at the exact
+	// moment a target is configured (e.g. what active_profile reads on disk
+	// right then), rather than after Set already returned.
+	onSet func()
 }
 
 func (f *fakeTarget) Name() string        { return f.name }
@@ -37,6 +42,9 @@ func (f *fakeTarget) SessionScoped() bool { return f.sessionScoped }
 func (f *fakeTarget) Available() bool     { return f.available }
 
 func (f *fakeTarget) Set(ex *proxy.Executor, cfg proxy.Config) error {
+	if f.onSet != nil {
+		f.onSet()
+	}
 	f.setCfgs = append(f.setCfgs, cfg)
 	if f.trace != nil {
 		*f.trace = append(*f.trace, "set:"+f.name)

@@ -47,7 +47,7 @@ func unsetGitConfig(ex *Executor, key string) error {
 	return nil
 }
 
-func (t *gitTarget) Status(elevate bool) (Status, error) {
+func (t *gitTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "git not installed"

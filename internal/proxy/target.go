@@ -20,8 +20,9 @@ type Target interface {
 	Available() bool
 	Set(ex *Executor, cfg Config) error
 	Unset(ex *Executor) error
-	// Status reports current state. elevate requests a privileged read
-	// (via sudo) for targets whose state isn't readable as a normal user
-	// (e.g. `snap get system ...`); targets that don't need it ignore it.
-	Status(elevate bool) (Status, error)
+	// Status reports current state. elevate requests a privileged read for
+	// targets whose state isn't readable as a normal user (e.g. snap);
+	// targets that don't need it ignore both arguments. ex carries the
+	// escalation choice, so a GUI can forbid a prompt it cannot show.
+	Status(ex *Executor, elevate bool) (Status, error)
 }

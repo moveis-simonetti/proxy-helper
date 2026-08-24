@@ -89,7 +89,7 @@ func (t *shellTarget) Unset(ex *Executor) error {
 	return nil
 }
 
-func (t *shellTarget) Status(elevate bool) (Status, error) {
+func (t *shellTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	files := t.rcFiles()
 	if len(files) == 0 {

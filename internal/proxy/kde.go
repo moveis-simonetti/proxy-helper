@@ -106,7 +106,7 @@ func (t *kdeTarget) Unset(ex *Executor) error {
 	return ex.Run(kw, "--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0")
 }
 
-func (t *kdeTarget) Status(elevate bool) (Status, error) {
+func (t *kdeTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "kwriteconfig/plasmashell not found"

@@ -45,7 +45,7 @@ func (t *lxdTarget) Unset(ex *Executor) error {
 	return ex.Run("lxc", "config", "unset", "core.proxy_ignore_hosts")
 }
 
-func (t *lxdTarget) Status(elevate bool) (Status, error) {
+func (t *lxdTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "lxc not installed"

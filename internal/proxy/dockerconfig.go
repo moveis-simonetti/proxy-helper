@@ -96,7 +96,7 @@ func (t *dockerConfigTarget) Unset(ex *Executor) error {
 	return ex.WriteFile(path, append(out, '\n'), 0o644)
 }
 
-func (t *dockerConfigTarget) Status(elevate bool) (Status, error) {
+func (t *dockerConfigTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: true}
 	path, err := t.path()
 	if err != nil {

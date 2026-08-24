@@ -74,7 +74,7 @@ func (t *npmTarget) Unset(ex *Executor) error {
 	return ex.WriteFile(path, []byte(strings.Join(filtered, "\n")+"\n"), 0o644)
 }
 
-func (t *npmTarget) Status(elevate bool) (Status, error) {
+func (t *npmTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: true}
 	path, err := t.path()
 	if err != nil {

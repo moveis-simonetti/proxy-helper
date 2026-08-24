@@ -117,7 +117,7 @@ func clearPackageKitProxyCache(ex *Executor) error {
 	return ex.RunPrivileged("pkcon", "quit")
 }
 
-func (t *gnomeTarget) Status(elevate bool) (Status, error) {
+func (t *gnomeTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "gsettings/org.gnome.system.proxy schema not found"

@@ -57,9 +57,21 @@ func (t *dockerdTarget) Unset(ex *Executor) error {
 	return nil
 }
 
-func (t *dockerdTarget) Status(elevate bool) (Status, error) {
+func (t *dockerdTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
-	content, err := readFileMaybePrivileged(dockerdDropInPath, elevate)
+	if !st.Available {
+		switch {
+		case !commandExists("systemctl"):
+			st.Detail = "systemctl not found"
+		case !commandExists("docker"):
+			st.Detail = "docker not found"
+		default:
+			st.Detail = "docker not available"
+		}
+		return st, nil
+	}
+
+	content, err := ex.ReadFileMaybePrivileged(dockerdDropInPath, elevate)
 	if os.IsNotExist(err) {
 		st.Detail = "not set"
 		return st, nil

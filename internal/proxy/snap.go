@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"os"
+	"errors"
 	"os/exec"
 	"strings"
 )
@@ -32,27 +32,29 @@ func (t *snapTarget) Unset(ex *Executor) error {
 // snap requires root even to *read* system config ("error: access denied
 // (try with sudo)"), unlike every other target here. Without elevate, a
 // denied read is reported as unknown rather than misreported as "not set".
-func (t *snapTarget) Status(elevate bool) (Status, error) {
+func (t *snapTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "snap not installed"
 		return st, nil
 	}
 
-	var cmd *exec.Cmd
+	var out []byte
+	var err error
 	if elevate && !IsRoot() {
-		cmd = exec.Command("sudo", "snap", "get", "system", "proxy.http")
-		cmd.Stdin = os.Stdin
-		cmd.Stderr = os.Stderr // let sudo's password prompt reach the terminal
+		// snap denies the read outright ("access denied") to a non-root
+		// user, so elevation here goes through the configured escalation
+		// (sudo/pkexec/refuse) rather than always shelling out to sudo.
+		out, err = ex.RunPrivilegedOutput("snap", "get", "system", "proxy.http")
 	} else {
-		cmd = exec.Command("snap", "get", "system", "proxy.http")
+		out, err = ex.RunOutput("snap", "get", "system", "proxy.http")
 	}
 
-	out, err := cmd.Output()
 	value := strings.TrimSpace(string(out))
 	if err != nil {
 		if !elevate {
-			if exitErr, ok := err.(*exec.ExitError); ok && strings.Contains(string(exitErr.Stderr), "access denied") {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) && strings.Contains(string(exitErr.Stderr), "access denied") {
 				st.NeedsElevation = true
 				st.Detail = "requires sudo to check"
 				return st, nil

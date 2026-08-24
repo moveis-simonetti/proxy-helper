@@ -154,7 +154,7 @@ func (t *vscodeTarget) Unset(ex *Executor) error {
 	return nil
 }
 
-func (t *vscodeTarget) Status(elevate bool) (Status, error) {
+func (t *vscodeTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: true}
 
 	var found bool

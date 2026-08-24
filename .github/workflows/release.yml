@@ -37,8 +37,46 @@ jobs:
           path: dist/proxy-helper-linux-${{ matrix.goarch }}
           if-no-files-found: error
 
+  # GTK3 GUI binary. Built separately from the "build" job above because it
+  # needs CGO enabled and native GTK3 dev headers, on native amd64/arm64
+  # runners (no cross-compiling cgo). Do not fold this into the "build" job:
+  # the CLI must keep building with CGO_ENABLED=0 on both architectures.
+  build-gui:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install GTK3 dev headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev
+
+      - name: Build GUI binary
+        env:
+          CGO_ENABLED: 1
+        run: |
+          mkdir -p dist
+          go build -tags gui -ldflags "-s -w" -o "dist/proxy-helper-gui_linux_${{ matrix.goarch }}" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proxy-helper-gui_linux_${{ matrix.goarch }}
+          path: dist/proxy-helper-gui_linux_${{ matrix.goarch }}
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, build-gui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

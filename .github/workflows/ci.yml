@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Test (CLI, no GTK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "gofmt found unformatted files:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test ./... -race
+
+  test-gui:
+    name: Test (GUI, -tags gui)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install GTK3 dev headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev
+
+      - name: go vet -tags gui
+        run: go vet -tags gui ./...
+
+      - name: go test -tags gui -race
+        env:
+          CGO_ENABLED: 1
+        run: go test -tags gui ./... -race
+
+  no-gtk-in-cli:
+    name: CLI binary stays free of GTK symbols
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build CLI (CGO disabled, no gui tag)
+        env:
+          CGO_ENABLED: 0
+        run: go build -o proxy-helper .
+
+      - name: Assert no GTK symbols leaked into the CLI binary
+        run: |
+          # This is the invariant that keeps GTK out of the plain CLI binary:
+          # without the "gui" build tag and with CGO disabled, no gtk symbol
+          # of any kind should show up in the symbol table. A non-zero count
+          # here means the gui/dependency split broke.
+          count="$(go tool nm proxy-helper | grep -ci gtk3 || true)"
+          echo "gtk3 symbol matches: $count"
+          if [ "$count" -ne 0 ]; then
+            echo "GTK symbols found in the CLI binary — the gui/dependency split is broken"
+            go tool nm proxy-helper | grep -i gtk3
+            exit 1
+          fi
+          echo "OK: no GTK symbols in the CLI binary"

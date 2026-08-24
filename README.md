@@ -66,7 +66,31 @@ tempo de execução — só nesse binário; o `proxy-helper` sem a tag `gui` nã
 essa dependência. A dependência `gotk3` está fixada numa pseudo-versão do
 `master` (não na última tag), porque a tag `v0.6.4` não compila com a
 toolchain deste projeto — não rode `go get -u` nela sem antes confirmar que a
-versão nova compila.
+versão nova compila com `-tags gui` (o CI só testa a versão que já está no
+`go.mod`, não detecta uma atualização quebrada sozinho).
+
+A [release](https://github.com/moveis-simonetti/proxy-helper/releases/latest)
+publica os dois binários lado a lado: `proxy-helper-linux-$ARCH` (a CLI, sem
+GTK, sem dependência nenhuma em tempo de execução) e
+`proxy-helper-gui_linux_$ARCH` (CLI + comando `gui`, exige `libgtk-3-0`
+instalado no sistema para rodar). São instalados e usados
+independentemente — o binário com GUI **não substitui** o `proxy-helper`
+comum, ele só acrescenta a janela; todo o resto do README (targets, perfis,
+`proxy serve`, etc.) funciona igual nos dois. Hoje o `proxy-helper-gui` só
+sai para `amd64` e `arm64` em runners `ubuntu-24.04`/`ubuntu-24.04-arm`
+nativos (a GUI precisa de `cgo` habilitado com headers do GTK3, o que
+inviabiliza cross-compilar como a CLI faz); se o runner ARM parar de estar
+disponível para este repositório, a release passa a publicar só o binário
+`amd64` da GUI.
+
+Para desenvolver a interface gráfica com reload automático a cada mudança de
+código, use o [air](https://github.com/air-verse/air) — a configuração já
+está em `.air.toml`:
+
+```
+go install github.com/air-verse/air@latest
+air
+```
 
 ## Targets
 

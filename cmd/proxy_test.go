@@ -25,9 +25,10 @@ type fakeTarget struct {
 	setErr error
 }
 
-func (f *fakeTarget) Name() string       { return f.name }
-func (f *fakeTarget) RequiresRoot() bool { return false }
-func (f *fakeTarget) Available() bool    { return true }
+func (f *fakeTarget) Name() string        { return f.name }
+func (f *fakeTarget) RequiresRoot() bool  { return false }
+func (f *fakeTarget) SessionScoped() bool { return false }
+func (f *fakeTarget) Available() bool     { return true }
 
 func (f *fakeTarget) Set(ex *proxy.Executor, cfg proxy.Config) error {
 	f.setCfgs = append(f.setCfgs, cfg)

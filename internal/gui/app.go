@@ -7,7 +7,9 @@ package gui
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -31,23 +33,57 @@ func Run() error {
 	// with a clear message instead of leaving the user with a frozen
 	// terminal they have to Ctrl+C.
 	if !DisplayAvailable() {
-		return fmt.Errorf("no graphical session found (DISPLAY and WAYLAND_DISPLAY are both unset); the \"gui\" command requires a desktop session, use the other proxy-helper commands instead")
+		return fmt.Errorf("no graphical session found (DISPLAY and WAYLAND_DISPLAY are both unset); the \"gui\" command requires a desktop session — if you're connected over SSH, reconnect with `ssh -X` or `ssh -Y`, or use the other proxy-helper commands instead")
 	}
 
 	gtk.Init(nil)
 
-	win, err := gtk.WindowNew(gtk.WINDOW_TOPLEVEL)
+	// The runner is what keeps blocking work (Apply, Clear, ...) off the
+	// GTK main loop's thread while still delivering UI updates back onto
+	// it. deliver wraps glib.IdleAdd in a func() with no return value:
+	// IdleAdd accepts a func() bool too, and a stray true there would
+	// reschedule the callback forever and pin the UI at 100% CPU.
+	jobRunner := newRunner(func(f func()) { glib.IdleAdd(f) })
+	jobRunner.start()
+	// stop() is idempotent, so this defer is safe alongside the window's
+	// own "destroy" handler calling it too. It is what stops the process
+	// from exiting mid-job if gtk.Main() ever returns some other way than
+	// through destroy — a Ctrl+Q accelerator or a quit menu item calling
+	// gtk.MainQuit() directly, say. Without it, Go would not wait for the
+	// worker and the process could die with some proxy targets configured
+	// and others not.
+	defer jobRunner.stop()
+
+	win, err := newWindow(jobRunner)
 	if err != nil {
 		return err
 	}
 
-	win.SetTitle("proxy-helper")
-	win.SetDefaultSize(1000, 720)
-	win.Connect("destroy", func() {
-		gtk.MainQuit()
+	// A job that panics is caught by runner.run's recover (see jobs.go) so
+	// it cannot kill the worker goroutine, but with no handler registered
+	// that recovered panic only reaches stderr — invisible on a released
+	// build with no terminal attached, indistinguishable from the button
+	// simply not working. Wiring it to a dialog here is what makes that
+	// failure mode visible instead of silent.
+	jobRunner.setPanicHandler(func(v any) {
+		info, ok := v.(jobPanic)
+		if !ok {
+			// Should not happen: handlePanic always wraps the recovered
+			// value in a jobPanic before calling onPanic. Fall back to
+			// stderr rather than losing the report if that ever changes.
+			fmt.Fprintf(os.Stderr, "gui: job panicked: %v\n", v)
+			return
+		}
+		if err := showPanicDialog(win.Window, info); err != nil {
+			fmt.Fprintf(os.Stderr, "gui: job panicked: %v\n%s\n(failed to show panic dialog: %v)\n", info.Value, info.Stack, err)
+		}
 	})
 
-	win.ShowAll()
+	if _, err := setupStatusPage(win, jobRunner); err != nil {
+		return err
+	}
+
+	win.Window.ShowAll()
 	gtk.Main()
 
 	return nil

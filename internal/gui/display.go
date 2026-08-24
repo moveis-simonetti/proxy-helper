@@ -11,11 +11,16 @@ import "os"
 // present, based on DISPLAY (X11) and WAYLAND_DISPLAY (Wayland). It takes a
 // lookup function so callers (and tests) don't have to mutate the process
 // environment via os.Setenv/os.Unsetenv.
+//
+// A variable that is set but empty (DISPLAY="") is treated as absent, not
+// present: that is a real state, seen in containers and some systemd units,
+// and treating it as a live display would send the caller on to GTK's own
+// indefinite hang instead of this package's fail-fast message.
 func displayAvailable(lookupEnv func(string) (string, bool)) bool {
-	if _, ok := lookupEnv("DISPLAY"); ok {
+	if v, ok := lookupEnv("DISPLAY"); ok && v != "" {
 		return true
 	}
-	if _, ok := lookupEnv("WAYLAND_DISPLAY"); ok {
+	if v, ok := lookupEnv("WAYLAND_DISPLAY"); ok && v != "" {
 		return true
 	}
 	return false

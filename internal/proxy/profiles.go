@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // DefaultGlobalNoProxy lists hosts that bypass the proxy regardless of which
@@ -138,12 +139,19 @@ func (pf *ProfileFile) SetCurrent(cfg Config) {
 // Save writes the profiles config file, creating its parent directory if
 // needed. It uses 0600/0700 permissions since profiles may hold proxy
 // credentials in plain text.
+//
+// The write is atomic: it writes to a temp file in the same directory (so
+// the final rename stays on one filesystem) and renames it over the target.
+// A rename within a directory is atomic, so a concurrent reader — which
+// never takes the file lock, only writers do — sees either the old file or
+// the new one in full, never a torn write from a truncating WriteFile.
 func (pf *ProfileFile) Save() error {
 	path, err := ConfigFilePath()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
 
@@ -151,8 +159,90 @@ func (pf *ProfileFile) Save() error {
 	if err != nil {
 		return fmt.Errorf("encoding config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
+
+	tmp, err := os.CreateTemp(dir, ".config.json.tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file for %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+
+	// The temp file must never be readable by anyone else, even briefly:
+	// this config can hold proxy credentials in plain text, and
+	// os.CreateTemp's default mode is 0600 already, but chmod explicitly so
+	// the guarantee does not depend on that default staying unchanged.
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("setting permissions on temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing temp file for %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp file for %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
+}
+
+// withProfileFileLock acquires an exclusive lock on the config file's
+// sibling .lock file and runs fn while holding it. The lock lives in a
+// sibling file rather than in config.json itself: Save rewrites the config,
+// and a lock held on a descriptor that is about to be replaced protects
+// nothing.
+func withProfileFileLock(fn func() error) error {
+	path, err := ConfigFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	return fn()
+}
+
+// WithProfileLock runs fn against the profile file while holding an
+// exclusive lock, so a read-modify-write cycle cannot lose an update to a
+// concurrent one. The GUI and a CLI run can be active at the same time.
+func WithProfileLock(fn func(*ProfileFile) error) error {
+	return withProfileFileLock(func() error {
+		pf, err := LoadProfiles()
+		if err != nil {
+			return err
+		}
+		if err := fn(pf); err != nil {
+			return err
+		}
+		return pf.Save()
+	})
+}
+
+// SaveLocked writes pf to disk while holding the same exclusive lock as
+// WithProfileLock, without reloading it from disk first. Use this when the
+// caller already holds a *ProfileFile it must not discard by re-reading the
+// file — for example ApplyViaLocal, whose caller has already set
+// ActiveProfile on pf and must not have that choice silently dropped.
+//
+// This gives a narrower guarantee than WithProfileLock: the read that
+// produced pf happened outside the lock, so SaveLocked only prevents a torn
+// write, not a lost update — a concurrent writer's change made between that
+// read and this call is overwritten by whatever pf holds. That is inherent
+// to accepting an already-loaded ProfileFile rather than a defect; a caller
+// that needs the full read-modify-write guarantee should use
+// WithProfileLock instead.
+func SaveLocked(pf *ProfileFile) error {
+	return withProfileFileLock(pf.Save)
 }

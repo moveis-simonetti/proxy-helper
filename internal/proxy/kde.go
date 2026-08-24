@@ -15,6 +15,12 @@ func NewKdeTarget() Target { return &kdeTarget{} }
 func (t *kdeTarget) Name() string       { return "kde" }
 func (t *kdeTarget) RequiresRoot() bool { return false }
 
+// SessionScoped is true: kwriteconfig/kreadconfig write and read the
+// invoking user's own config files under $HOME/.config, resolved through
+// their session. Running as root would touch root's own config, not the
+// user's — never what the caller wants.
+func (t *kdeTarget) SessionScoped() bool { return true }
+
 // kdeMajorVersion returns the installed KDE Plasma major version (e.g.
 // "5", "6"), or "" if plasmashell isn't installed or its version can't be
 // parsed. kwriteconfig/kreadconfig are versioned by this number.

@@ -16,6 +16,8 @@ func NewDockerdTarget() Target { return &dockerdTarget{} }
 func (t *dockerdTarget) Name() string       { return "dockerd" }
 func (t *dockerdTarget) RequiresRoot() bool { return true }
 
+func (t *dockerdTarget) SessionScoped() bool { return false }
+
 const dockerdDropInPath = "/etc/systemd/system/docker.service.d/http-proxy.conf"
 
 func (t *dockerdTarget) Available() bool {

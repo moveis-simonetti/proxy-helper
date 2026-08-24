@@ -15,7 +15,9 @@ func NewNpmTarget() Target { return &npmTarget{} }
 
 func (t *npmTarget) Name() string       { return "npm" }
 func (t *npmTarget) RequiresRoot() bool { return false }
-func (t *npmTarget) Available() bool    { return true }
+
+func (t *npmTarget) SessionScoped() bool { return false }
+func (t *npmTarget) Available() bool     { return true }
 
 func (t *npmTarget) path() (string, error) {
 	home, err := os.UserHomeDir()

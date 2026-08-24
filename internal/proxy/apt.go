@@ -13,6 +13,8 @@ func NewAptTarget() Target { return &aptTarget{} }
 func (t *aptTarget) Name() string       { return "apt" }
 func (t *aptTarget) RequiresRoot() bool { return true }
 
+func (t *aptTarget) SessionScoped() bool { return false }
+
 const aptProxyPath = "/etc/apt/apt.conf.d/95proxies"
 
 // aptConfDir is a seam for tests: Available() consults it instead of the

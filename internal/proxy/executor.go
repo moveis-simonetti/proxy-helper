@@ -169,6 +169,14 @@ func wrapWithStderr(err error, captured string) error {
 	return fmt.Errorf("%w: %s", err, redactSecrets(msg))
 }
 
+// Warn prints an informational message to the same stream a command's
+// stderr goes to, without treating it as a failure. Targets use it when
+// skipping an optional step instead of either failing the whole operation
+// or doing nothing silently.
+func (e *Executor) Warn(format string, args ...any) {
+	fmt.Fprintf(e.stderr(), "  [warn] "+format+"\n", args...)
+}
+
 // Run executes a command as the current user.
 func (e *Executor) Run(name string, args ...string) error {
 	if e.DryRun {

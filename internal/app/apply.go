@@ -92,9 +92,22 @@ func Apply(d Deps, ex *proxy.Executor, cfg proxy.Config, targetNames []string, v
 // eachTarget runs op against every available target, recording an
 // availability skip or a sudo notice ahead of it as needed, and the
 // resulting outcome (ok, or OutcomeFailed on error). setEach and Clear are
-// both instances of this shape, differing only in the operation and the
-// outcome that marks success.
-func eachTarget(d Deps, rep *Report, ex *proxy.Executor, targets []proxy.Target, op func(proxy.Target) error, ok Outcome) {
+// both instances of this shape, differing only in the operation, the
+// outcome that marks success, and needsRoot.
+//
+// needsRoot decides, per target, whether *this* op will actually need
+// elevation — it is not just t.RequiresRoot(), because that single bool
+// can conflate two different operations (see gnome's RequiresRoot doc
+// comment: true only because Unset's PackageKit workaround needs it, while
+// Set never does). setEach and Clear each pass the honest answer for their
+// own operation.
+//
+// The notice is further gated on ex.Escalation != proxy.EscalateNone:
+// EscalateNone (used by the GUI for session-scoped targets, and by any
+// other in-process caller) refuses to elevate outright — see Executor's
+// doc comment — so no password prompt can ever appear, and warning about
+// one would be a lie regardless of what needsRoot says.
+func eachTarget(d Deps, rep *Report, ex *proxy.Executor, targets []proxy.Target, op func(proxy.Target) error, ok Outcome, needsRoot func(proxy.Target) bool) {
 	for _, t := range targets {
 		if !t.Available() {
 			// The target already knows why it is unavailable: every target's
@@ -107,7 +120,7 @@ func eachTarget(d Deps, rep *Report, ex *proxy.Executor, targets []proxy.Target,
 			rep.Add(Result{Target: t.Name(), Outcome: OutcomeSkipped, Detail: detail})
 			continue
 		}
-		if t.RequiresRoot() && !proxy.IsRoot() && !ex.DryRun {
+		if needsRoot(t) && !proxy.IsRoot() && !ex.DryRun && ex.Escalation != proxy.EscalateNone {
 			warn(d, rep, Notice{Kind: NoticeNeedsSudo, Target: t.Name()})
 		}
 		if err := op(t); err != nil {
@@ -118,12 +131,19 @@ func eachTarget(d Deps, rep *Report, ex *proxy.Executor, targets []proxy.Target,
 	}
 }
 
+// setNeedsRoot is the needsRoot answer for Set: a session-scoped target's
+// Set never needs root, even when RequiresRoot() is true for a reason that
+// only applies to its Unset (see gnome).
+func setNeedsRoot(t proxy.Target) bool {
+	return t.RequiresRoot() && !t.SessionScoped()
+}
+
 // setEach lets the caller decide the config per target, which is what the
 // Docker targets need when the plumbing is in place.
 func setEach(d Deps, rep *Report, ex *proxy.Executor, targets []proxy.Target, configFor func(proxy.Target) proxy.Config) {
 	eachTarget(d, rep, ex, targets, func(t proxy.Target) error {
 		return t.Set(ex, configFor(t))
-	}, OutcomeApplied)
+	}, OutcomeApplied, setNeedsRoot)
 }
 
 // ApplyViaLocal writes the plumbing: it points the targets at the local
@@ -205,9 +225,12 @@ func Clear(d Deps, ex *proxy.Executor, targetNames []string) (*Report, error) {
 	}
 
 	rep := &Report{}
+	// Unlike Set, Unset keeps the plain t.RequiresRoot(): gnome's Unset
+	// genuinely needs root for the PackageKit workaround when it applies,
+	// so a CLI "proxy unset --targets gnome" must still get the notice.
 	eachTarget(d, rep, ex, targets, func(t proxy.Target) error {
 		return t.Unset(ex)
-	}, OutcomeCleared)
+	}, OutcomeCleared, proxy.Target.RequiresRoot)
 	return rep, nil
 }
 

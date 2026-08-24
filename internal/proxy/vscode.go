@@ -16,7 +16,9 @@ func NewVscodeTarget() Target { return &vscodeTarget{} }
 
 func (t *vscodeTarget) Name() string       { return "vscode" }
 func (t *vscodeTarget) RequiresRoot() bool { return false }
-func (t *vscodeTarget) Available() bool    { return true }
+
+func (t *vscodeTarget) SessionScoped() bool { return false }
+func (t *vscodeTarget) Available() bool     { return true }
 
 type vscodeProduct struct {
 	dir  string // config dir name under $XDG_CONFIG_HOME/<dir>/User/settings.json

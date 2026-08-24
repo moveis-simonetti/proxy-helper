@@ -14,7 +14,9 @@ func NewLxdTarget() Target { return &lxdTarget{} }
 
 func (t *lxdTarget) Name() string       { return "lxd" }
 func (t *lxdTarget) RequiresRoot() bool { return false }
-func (t *lxdTarget) Available() bool    { return commandExists("lxc") }
+
+func (t *lxdTarget) SessionScoped() bool { return false }
+func (t *lxdTarget) Available() bool     { return commandExists("lxc") }
 
 func (t *lxdTarget) Set(ex *Executor, cfg Config) error {
 	proxyURL, err := cfg.URL()

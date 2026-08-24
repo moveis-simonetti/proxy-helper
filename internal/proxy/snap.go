@@ -12,7 +12,9 @@ func NewSnapTarget() Target { return &snapTarget{} }
 
 func (t *snapTarget) Name() string       { return "snap" }
 func (t *snapTarget) RequiresRoot() bool { return true }
-func (t *snapTarget) Available() bool    { return commandExists("snap") }
+
+func (t *snapTarget) SessionScoped() bool { return false }
+func (t *snapTarget) Available() bool     { return commandExists("snap") }
 
 func (t *snapTarget) Set(ex *Executor, cfg Config) error {
 	proxyURL, err := cfg.URL()

@@ -17,6 +17,8 @@ func NewShellTarget() Target { return &shellTarget{} }
 func (t *shellTarget) Name() string       { return "shell" }
 func (t *shellTarget) RequiresRoot() bool { return false }
 
+func (t *shellTarget) SessionScoped() bool { return false }
+
 func (t *shellTarget) rcFiles() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {

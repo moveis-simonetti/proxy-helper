@@ -32,7 +32,7 @@ func showPanicDialog(win *gtk.Window, info jobPanic) error {
 	if err != nil {
 		return err
 	}
-	content.SetSpacing(6)
+	padDialogContent(content)
 
 	msg, err := gtk.LabelNew("Uma operação falhou de forma inesperada. " +
 		"O que já foi aplicado permanece como está; nada foi desfeito.")
@@ -116,7 +116,7 @@ func showTextDialog(win *gtk.Window, title, text string) error {
 	if err != nil {
 		return err
 	}
-	content.SetSpacing(6)
+	padDialogContent(content)
 
 	scroller, err := gtk.ScrolledWindowNew(nil, nil)
 	if err != nil {
@@ -159,6 +159,13 @@ func showResultDialog(win *gtk.Window, rep *app.Report) error {
 	}
 	defer dlg.Destroy()
 	dlg.SetTransientFor(win)
+	// Modal: onBusy(false) re-enables the action buttons via glib.IdleAdd
+	// (jobs.go), which fires *inside* this dialog's nested Run() main loop,
+	// not after it returns. Without SetModal the main window stays
+	// interactive while the dialog is still open, so the user can queue
+	// another Apply/Clear behind it — confusing, even though the runner
+	// serializes jobs and nothing actually corrupts.
+	dlg.SetModal(true)
 	dlg.SetTitle("Resultado")
 	dlg.SetDefaultSize(560, 420)
 	dlg.AddButton("Fechar", gtk.RESPONSE_CLOSE)
@@ -167,7 +174,7 @@ func showResultDialog(win *gtk.Window, rep *app.Report) error {
 	if err != nil {
 		return err
 	}
-	content.SetSpacing(6)
+	padDialogContent(content)
 
 	scroller, err := gtk.ScrolledWindowNew(nil, nil)
 	if err != nil {
@@ -175,13 +182,22 @@ func showResultDialog(win *gtk.Window, rep *app.Report) error {
 	}
 	scroller.SetPolicy(gtk.POLICY_NEVER, gtk.POLICY_AUTOMATIC)
 
-	list, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 4)
+	// spaceRelated between rows: each row is one target's outcome, so this
+	// is the gap between distinct list items, not between lines within one
+	// item — it must read as looser than rowBox's spaceTight below, or nothing
+	// visually separates "next line of this row" from "next row". Using the
+	// same value for both (an earlier version of this file did) collapses
+	// the list into one undifferentiated block.
+	list, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, spaceRelated)
 	if err != nil {
 		return err
 	}
 
 	for _, row := range resultRows(rep) {
-		rowBox, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 2)
+		// spaceTight between the header/detail/error lines within one row:
+		// the "inside a group" half of the 2:1 spaceTight/spaceRelated
+		// ratio above.
+		rowBox, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, spaceTight)
 		if err != nil {
 			return err
 		}
@@ -263,9 +279,13 @@ func showNoticesDialog(win *gtk.Window, rep *app.Report) error {
 	if err != nil {
 		return err
 	}
-	content.SetSpacing(6)
+	padDialogContent(content)
 
-	list, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 8)
+	// spaceRelated between notices: they are items of one list, same 2:1
+	// reasoning as the result dialog's row list above — each notice is a
+	// distinct entry, not a line within a shared item, so it gets the
+	// wider of the two steps.
+	list, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, spaceRelated)
 	if err != nil {
 		return err
 	}

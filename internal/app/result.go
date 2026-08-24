@@ -53,6 +53,10 @@ const (
 	// NoticeNeedsSudo warns that a target is about to prompt for a password.
 	// Notice.Target carries the target name.
 	NoticeNeedsSudo
+	// NoticeProfileAlreadyPlumbed reports that switching profiles changed
+	// state only: the targets already point at the local daemon, so nothing
+	// was written to them. Notice.Args carries "profile".
+	NoticeProfileAlreadyPlumbed
 )
 
 // Notice is a warning aimed at the user, carried as data so each front end

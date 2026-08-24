@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
 
 	"github.com/spf13/cobra"
@@ -15,28 +16,15 @@ var proxyOffCmd = &cobra.Command{
 		"direct. Targets keep pointing at the local proxy, so this needs no " +
 		"sudo and takes effect immediately. Use \"proxy on\" to go back.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var lastProfile string
-		wasOn := false
-		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
-			if pf.ActiveProfile == "" {
-				return nil
-			}
-			pf.Off()
-			lastProfile = pf.LastProfile
-			wasOn = true
-			return nil
-		})
+		res, err := app.Off(deps(), &proxy.Executor{})
 		if err != nil {
 			return err
 		}
-		if !wasOn {
+		if res.AlreadyOff {
 			fmt.Println("already off")
 			return nil
 		}
-		if err := reloadDaemon(&proxy.Executor{}); err != nil {
-			return err
-		}
-		fmt.Printf("off (was %q); traffic now goes direct\n", lastProfile)
+		fmt.Printf("off (was %q); traffic now goes direct\n", res.Previous)
 		return nil
 	},
 }
@@ -50,21 +38,11 @@ var proxyOnCmd = &cobra.Command{
 		if len(args) == 1 {
 			name = args[0]
 		}
-		var activeProfile string
-		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
-			if err := pf.On(name); err != nil {
-				return err
-			}
-			activeProfile = pf.ActiveProfile
-			return nil
-		})
+		res, err := app.On(deps(), &proxy.Executor{}, name)
 		if err != nil {
 			return err
 		}
-		if err := reloadDaemon(&proxy.Executor{}); err != nil {
-			return err
-		}
-		fmt.Printf("on (profile %q)\n", activeProfile)
+		fmt.Printf("on (profile %q)\n", res.Profile)
 		return nil
 	},
 }

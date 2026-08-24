@@ -6,6 +6,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
 
 	"github.com/spf13/cobra"
@@ -108,10 +109,13 @@ var proxyProfileEditCmd = &cobra.Command{
 			return err
 		}
 
-		err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
-			cfg, exists := pf.Get(name)
+		// app.SaveProfile, not a bare WithProfileLock: editing the active
+		// profile has to reach a running daemon, which resolves that
+		// profile's host, port, credentials and no-proxy itself.
+		err := app.SaveProfile(deps(), &proxy.Executor{}, func(existing map[string]proxy.Config) (string, proxy.Config, error) {
+			cfg, exists := existing[name]
 			if !exists {
-				return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
+				return "", proxy.Config{}, fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
 			}
 
 			if cmd.Flags().Changed("scheme") {
@@ -133,8 +137,7 @@ var proxyProfileEditCmd = &cobra.Command{
 				cfg.NoProxy = profileEditNoProxy
 			}
 
-			pf.Profiles[name] = cfg
-			return nil
+			return name, cfg, nil
 		})
 		if err != nil {
 			return err
@@ -229,69 +232,24 @@ var proxyProfileEnableCmd = &cobra.Command{
 	Short: "Apply a saved profile's proxy settings and mark it active",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-
-		pf, err := proxy.LoadProfiles()
+		ex := &proxy.Executor{DryRun: profileEnableDryRun}
+		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, profileEnableViaLocal)
 		if err != nil {
 			return err
 		}
-		cfg, exists := pf.Get(name)
-		if !exists {
-			return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
+		if res.Report != nil {
+			renderReport(stdout(), res.Report)
 		}
-
-		if profileEnableViaLocal {
-			// Build the plumbing for a *named* profile: active_profile
-			// gets the name (not the reserved "_current" copy, which
-			// would go stale the moment the profile is edited), and the
-			// targets only ever see the loopback address.
-			cfg.NoProxy = proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
-			pf.ActiveProfile = name
-			return applyViaLocal(pf, cfg, profileEnableTargets, profileEnableDryRun)
-		}
-
-		if pf.ViaLocal {
-			// The plumbing is already in place: the targets point at the
-			// daemon, so switching profiles is pure state. Touching a
-			// target here would tear the plumbing down and write the
-			// upstream credential into every tool's config file.
-			if profileEnableDryRun {
-				fmt.Printf("would enable profile %q (targets already point at the local proxy; nothing to change there)\n", name)
-				return nil
+		if res.TargetsUntouched {
+			if !profileEnableDryRun {
+				fmt.Printf("profile %q enabled\n", args[0])
 			}
-			if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-				lpf.ActiveProfile = name
-				return nil
-			}); err != nil {
-				return err
-			}
-			if err := reloadDaemon(&proxy.Executor{}); err != nil {
-				return err
-			}
-			fmt.Printf("profile %q enabled\n", name)
 			return nil
 		}
-
-		// Record the activation *before* touching any target. Targets fail
-		// for mundane reasons — a tool with an unparsable config file, a
-		// declined sudo prompt — and returning early used to leave the
-		// machine with every target configured but no active profile: the
-		// partial state this tool exists to prevent.
-		if !profileEnableDryRun {
-			if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-				lpf.ActiveProfile = name
-				return nil
-			}); err != nil {
-				return err
-			}
-			if err := reloadDaemon(&proxy.Executor{}); err != nil {
-				return err
-			}
+		if res.Report != nil {
+			return res.Report.Err()
 		}
-		// applyConfig runs after the lock above is released — it (via
-		// internal/app.Apply) may itself take the profile lock, and flock
-		// does not nest within a process.
-		return applyConfig(cfg, profileEnableTargets, profileEnableDryRun, false)
+		return nil
 	},
 }
 
@@ -307,37 +265,17 @@ var proxyProfileDisableCmd = &cobra.Command{
 	Short: "Clear the active profile's proxy settings",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pf, err := proxy.LoadProfiles()
+		var name string
+		if len(args) == 1 {
+			name = args[0]
+		}
+		ex := &proxy.Executor{DryRun: profileDisableDryRun}
+		rep, err := app.Disable(deps(), ex, name, profileDisableTargets)
 		if err != nil {
 			return err
 		}
-		if pf.ActiveProfile == "" {
-			return fmt.Errorf("no profile is currently enabled")
-		}
-		if len(args) == 1 && args[0] != pf.ActiveProfile {
-			return fmt.Errorf("profile %q is not the active one (active: %q)", args[0], pf.ActiveProfile)
-		}
-
-		// clearTargets runs, and finishes, before the lock below is taken:
-		// it (via internal/app.Clear) may itself take the profile lock, and
-		// flock does not nest within a process.
-		if err := clearTargets(profileDisableTargets, profileDisableDryRun); err != nil {
-			return err
-		}
-		if profileDisableDryRun {
-			return nil
-		}
-
-		// Off, not a bare assignment: it remembers the profile so that
-		// "proxy on" works after a disable exactly as it does after an
-		// "proxy off".
-		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-			lpf.Off()
-			return nil
-		}); err != nil {
-			return err
-		}
-		return reloadDaemon(&proxy.Executor{})
+		renderReport(stdout(), rep)
+		return rep.Err()
 	},
 }
 

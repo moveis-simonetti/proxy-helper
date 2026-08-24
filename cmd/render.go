@@ -47,6 +47,8 @@ func renderNotice(w io.Writer, n app.Notice) {
 		fmt.Fprintln(w, "        Run \"proxy serve install --docker-bridge\" to also listen where containers can reach.")
 	case app.NoticeNeedsSudo:
 		fmt.Fprintf(w, "  note: %s needs sudo, you may be prompted for your password\n", n.Target)
+	case app.NoticeProfileAlreadyPlumbed:
+		fmt.Fprintf(w, "would enable profile %q (targets already point at the local proxy; nothing to change there)\n", n.Args["profile"])
 	}
 }
 

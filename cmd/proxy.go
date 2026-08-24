@@ -59,22 +59,6 @@ func applyConfig(cfg proxy.Config, targetNames []string, dryRun, viaLocal bool) 
 	return rep.Err()
 }
 
-// applyViaLocal writes the plumbing: it points the targets at the local
-// daemon and records that fact. The caller has already decided which profile
-// the daemon should serve (an ad-hoc "_current" or a named one) by setting
-// pf.ActiveProfile; this function never inspects or changes that choice, it
-// only makes sure the targets reach the daemon and that the daemon re-reads
-// the config.
-func applyViaLocal(pf *proxy.ProfileFile, cfg proxy.Config, targetNames []string, dryRun bool) error {
-	ex := &proxy.Executor{DryRun: dryRun}
-	rep, err := app.ApplyViaLocal(deps(), ex, pf, cfg, targetNames)
-	if err != nil {
-		return err
-	}
-	renderReport(stdout(), rep)
-	return rep.Err()
-}
-
 // clearTargets resolves targetNames and removes proxy settings from each.
 func clearTargets(targetNames []string, dryRun bool) error {
 	ex := &proxy.Executor{DryRun: dryRun}

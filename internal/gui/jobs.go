@@ -33,7 +33,7 @@ import (
 // means stop() blocks forever and the UI stays disabled with no error and no
 // way out. See run() for how that is guaranteed.
 type runner struct {
-	jobs    chan func() func()
+	jobs    chan job
 	deliver func(func())
 	done    chan struct{}
 
@@ -41,7 +41,7 @@ type runner struct {
 	running  bool
 	started  bool
 	stopped  bool
-	onBusy   func(bool)
+	onBusy   []func(bool)
 	onPanic  func(any)
 	stopOnce sync.Once
 }
@@ -54,11 +54,24 @@ type jobPanic struct {
 	Stack []byte
 }
 
+// job is one unit of work plus whether it should announce itself.
+//
+// quiet exists for periodic background refreshes. Every job used to raise
+// the busy signal, which disables the action buttons on EVERY page — right
+// for a click the user made and is waiting on, wrong for a poll they did not
+// ask for. Once the Daemon page started re-reading the journal every two
+// seconds, that turned into every button in the window flickering on a
+// two-second cycle.
+type job struct {
+	work  func() func()
+	quiet bool
+}
+
 // newRunner builds a runner. deliver puts a closure on the UI thread; in
 // production that is glib.IdleAdd, in tests it runs inline.
 func newRunner(deliver func(func())) *runner {
 	return &runner{
-		jobs:    make(chan func() func(), 16),
+		jobs:    make(chan job, 16),
 		deliver: deliver,
 		done:    make(chan struct{}),
 	}
@@ -69,7 +82,13 @@ func newRunner(deliver func(func())) *runner {
 func (r *runner) setBusyHandler(fn func(bool)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.onBusy = fn
+	// Appends, never replaces. Every page registers one of these, and a
+	// single-slot field meant the last page to be set up silently won: the
+	// other pages' buttons were never disabled during a job, and any state
+	// they recompute from the busy callback simply stopped happening. The
+	// symptom is invisible until two handlers exist, which is why this held
+	// while there was only one page.
+	r.onBusy = append(r.onBusy, fn)
 }
 
 // setPanicHandler registers the callback that receives a job's panic value
@@ -89,8 +108,8 @@ func (r *runner) start() {
 	r.started = true
 	r.mu.Unlock()
 	go func() {
-		for job := range r.jobs {
-			r.run(job)
+		for j := range r.jobs {
+			r.run(j)
 		}
 		close(r.done)
 	}()
@@ -148,16 +167,20 @@ func (r *runner) stop() {
 // out of reach and out of scope here — deliverNow in tests runs it
 // synchronously instead, which is what makes an apply-closure panic visible
 // to this recover during tests.
-func (r *runner) run(job func() func()) {
+func (r *runner) run(j job) {
 	defer func() {
 		if p := recover(); p != nil {
 			r.handlePanic(p, debug.Stack())
 		}
-		r.setRunning(false)
+		if !j.quiet {
+			r.setRunning(false)
+		}
 	}()
-	r.setRunning(true)
+	if !j.quiet {
+		r.setRunning(true)
+	}
 
-	apply := job()
+	apply := j.work()
 	if apply != nil {
 		r.deliver(apply)
 	}
@@ -193,9 +216,11 @@ func (r *runner) handlePanic(v any, stack []byte) {
 func (r *runner) setRunning(v bool) {
 	r.mu.Lock()
 	r.running = v
-	fn := r.onBusy
+	// Copied under the lock: a handler registered mid-notification must not
+	// race with the range below.
+	fns := append([]func(bool){}, r.onBusy...)
 	r.mu.Unlock()
-	if fn == nil {
+	if len(fns) == 0 {
 		return
 	}
 	func() {
@@ -204,7 +229,11 @@ func (r *runner) setRunning(v bool) {
 				r.handlePanic(p, debug.Stack())
 			}
 		}()
-		r.deliver(func() { fn(v) })
+		r.deliver(func() {
+			for _, fn := range fns {
+				fn(v)
+			}
+		})
 	}()
 }
 
@@ -228,7 +257,7 @@ func (r *runner) setRunning(v bool) {
 // for another reason — pausing it mid-session, say — a dropped submit would
 // no longer be a harmless shutdown race, it would be a silently lost click,
 // and this design would need revisiting.
-func (r *runner) submit(job func() func()) {
+func (r *runner) submit(fn func() func()) {
 	r.mu.Lock()
 	stopped := r.stopped
 	r.mu.Unlock()
@@ -239,11 +268,45 @@ func (r *runner) submit(job func() func()) {
 	// send below; recover turns that race into a silently dropped job
 	// instead of a panic on a closed channel.
 	defer func() { recover() }()
-	r.jobs <- job
+	r.jobs <- job{work: fn}
+}
+
+// post schedules f to run on the UI thread via the same deliver function
+// submit's job results use (glib.IdleAdd in production, inline in tests
+// that pass a synchronous deliver). This is the runner's only sanctioned
+// path for "run this after the current handler returns" — see the package
+// doc comment on jobs.go: this file is the sole boundary between GTK and
+// the rest of the package, so nothing outside it may call glib.IdleAdd
+// directly.
+//
+// Deferring is not a nicety for every caller: reverting a GtkSwitch from
+// inside its own "state-set" handler does not stick, because
+// gtk_switch_set_active reasserts the requested state right after the
+// handler returns false — confirmed the hard way while building the Daemon
+// page's bridge switch (page_daemon.go). r.post(...) is what buys the
+// "after, not during" timing that revert needs, without requiring an
+// otherwise I/O-free revert to go through a full submit() job.
+func (r *runner) post(f func()) {
+	r.deliver(f)
 }
 
 func (r *runner) busy() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.running
+}
+
+// submitQuiet queues work that must stay serialized with everything else but
+// must NOT disable the UI: a background refresh nobody clicked for. Use
+// submit for anything the user is waiting on — the busy signal is what tells
+// them the click landed.
+func (r *runner) submitQuiet(fn func() func()) {
+	r.mu.Lock()
+	stopped := r.stopped
+	r.mu.Unlock()
+	if stopped {
+		return
+	}
+	defer func() { recover() }()
+	r.jobs <- job{work: fn, quiet: true}
 }

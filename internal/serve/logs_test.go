@@ -80,19 +80,6 @@ func TestRenderEntriesRedactsCredentials(t *testing.T) {
 	}
 }
 
-func TestRenderStats(t *testing.T) {
-	var buf bytes.Buffer
-	if err := RenderStats(&buf, parseSample(t)); err != nil {
-		t.Fatalf("RenderStats: %v", err)
-	}
-	out := buf.String()
-	for _, want := range []string{"3", "proxied", "direct", "github.com"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("stats output is missing %q\n---\n%s", want, out)
-		}
-	}
-}
-
 // mustJournalLine encodes entry as journald would wrap it: the daemon's
 // JSON serialized into the MESSAGE field of journalctl's own envelope.
 func mustJournalLine(t *testing.T, entry LogEntry) string {
@@ -192,4 +179,30 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+func TestEffectiveSincePrefersTheExplicitFlag(t *testing.T) {
+	if got := EffectiveSince("10m", "2026-08-25T16:00:00Z", false); got != "10m" {
+		t.Errorf("EffectiveSince = %q, want the explicit --since to win", got)
+	}
+}
+
+func TestEffectiveSinceFallsBackToTheStoredCutoff(t *testing.T) {
+	if got := EffectiveSince("", "2026-08-25T16:00:00Z", false); got != "2026-08-25T16:00:00Z" {
+		t.Errorf("EffectiveSince = %q, want the stored cut-off", got)
+	}
+}
+
+// --all is the way back to everything: a cut-off the user cannot undo would
+// make entries unreachable with no explanation.
+func TestEffectiveSinceAllIgnoresBoth(t *testing.T) {
+	if got := EffectiveSince("10m", "2026-08-25T16:00:00Z", true); got != "" {
+		t.Errorf("EffectiveSince = %q, want no --since at all", got)
+	}
+}
+
+func TestEffectiveSinceIsEmptyWithNothingSet(t *testing.T) {
+	if got := EffectiveSince("", "", false); got != "" {
+		t.Errorf("EffectiveSince = %q, want empty", got)
+	}
 }

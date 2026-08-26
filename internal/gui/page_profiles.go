@@ -496,6 +496,16 @@ func setupProfilesPage(win *window, r *runner) (*profilesPage, error) {
 			return
 		}
 		pp.startNew()
+		// Reloads the list from disk on every visit, the same call
+		// setupProfilesPage makes right after its own startNew() below —
+		// what makes this tab self-sufficient: config.json can change from
+		// outside this page entirely (the Importar page, the CLI in
+		// another window, a text editor), and entering the tab is what
+		// notices, rather than depending on whichever page changed it
+		// remembering to call back in. Placed after startNew(), matching
+		// setup's order, though the two do not interact here: startNew()
+		// only touches the form, load() only touches the list/selection.
+		pp.load()
 	})
 
 	pp.startNew()
@@ -952,8 +962,8 @@ func (pp *profilesPage) save() {
 // confirmRemove asks for confirmation before deleting the profile currently
 // loaded in the form. The dialog is modal and transient for the main
 // window — the Status page's result dialog already had a bug from skipping
-// SetModal (see showResultDialog in dialogs.go), so this follows the same
-// pattern deliberately.
+// SetModal (see showApplyResultDialog in dialogs.go), so this follows the
+// same pattern deliberately.
 func (pp *profilesPage) confirmRemove() {
 	name := pp.editing
 	if name == "" {

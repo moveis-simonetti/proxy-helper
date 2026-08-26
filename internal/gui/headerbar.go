@@ -128,12 +128,12 @@ func (h *headerbarCtl) applyProfiles(pf *proxy.ProfileFile, err error) {
 	names := visibleProfiles(pf)
 	active := pf.ActiveProfile
 
-	// The placeholder is only ever an entry when there is no active
-	// profile: once a profile is active it IS the selection, so a second
-	// "Nenhum perfil" row alongside it would just be a confusing, inert
-	// option to pick.
-	if active == "" {
-		h.combo.Append("", "Nenhum perfil")
+	// The extra entry is only ever present when what is active is not a
+	// saved profile: no profile at all, or the reserved "_current" slot.
+	// Once a saved profile is active it IS the selection, so a second row
+	// alongside it would just be a confusing, inert option to pick.
+	if id, label, ok := headerbarExtraEntry(active); ok {
+		h.combo.Append(id, label)
 	}
 	for _, name := range names {
 		h.combo.Append(name, name)
@@ -204,6 +204,18 @@ func (h *headerbarCtl) trySetMaster(state bool) {
 // revertMaster snaps the switch back to a known-good position after a
 // failed On/Off, guarded by repopulating so SetActive's own "state-set"
 // does not re-enter trySetMaster.
+//
+// This works — unlike a same-shape revert called synchronously from inside
+// a "state-set" handler — only because it always runs from a runner
+// delivery (trySetMaster's return func()), strictly after the On/Off job's
+// original SetActive/state-set round has already finished. GTK's
+// gtk_switch_set_active() reasserts the originally-requested state right
+// after every "state-set" handler returns false, so a revert attempted
+// *inside* that same handler call gets silently overwritten back — see
+// page_daemon.go's bridge switch, which hits exactly that trap with a
+// synchronous (no I/O) confirmation and has to defer its revert with
+// r.post for this same reason. Do not "simplify" that call into an inline
+// SetActive to match this function; it does not stick.
 func (h *headerbarCtl) revertMaster(active bool) {
 	h.repopulating = true
 	h.applyMasterState(active)
@@ -261,7 +273,7 @@ func (h *headerbarCtl) trySwitch(name string) {
 // confirmation (see confirmRemove in page_profiles.go).
 func (h *headerbarCtl) confirmRewrite(name string) bool {
 	dlg := gtk.MessageDialogNew(h.topWindow, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO,
-		"Trocar para %q vai reescrever a configuração de proxy em todos os targets e pode pedir sua senha. Continuar?", name)
+		"Trocar para %q vai reescrever a configuração de proxy em todos os alvos e pode pedir sua senha. Continuar?", name)
 	dlg.SetModal(true)
 	dlg.SetTransientFor(h.topWindow)
 	resp := dlg.Run()
@@ -317,6 +329,23 @@ func (h *headerbarCtl) doEnable(name string, includePrivileged bool) {
 				return
 			}
 			h.current = name
+			// The master switch has to be repainted here, and forgetting it
+			// was a real bug with a confusing symptom: activating a profile
+			// from the selector left the switch showing "Inativo" while the
+			// config said otherwise, so flipping it went down app.On("") —
+			// "restore the last profile" — which on a machine that never had
+			// one fails with "Nenhum perfil para ativar", right after the
+			// user had just picked one. Restarting the GUI "fixed" it only
+			// because a fresh applyProfiles reads the truth off disk.
+			//
+			// The repopulating guard is this caller's responsibility (see
+			// applyMasterState): without it, SetActive fires "state-set" and
+			// trySetMaster would run app.On on top of the enable that just
+			// finished.
+			h.repopulating = true
+			h.applyMasterState(true)
+			h.repopulating = false
+
 			h.showEnableResult(res, privOut)
 			if h.onProfileChanged != nil {
 				h.onProfileChanged()
@@ -328,24 +357,16 @@ func (h *headerbarCtl) doEnable(name string, includePrivileged bool) {
 // showEnableResult surfaces what Enable actually did. Route 2
 // (TargetsUntouched, no privileged output) has nothing worth a dialog for —
 // that silence is the point, it is what makes it feel instantaneous.
-// Route 3 reuses the same result/notices/privileged-output dialogs the
-// Status page's apply() uses, for the same reason: there is no separate
-// vocabulary for "this Apply happened to be triggered by the profile
-// selector".
+// Route 3 reuses the same showApplyResultDialog the Status page's apply()
+// uses, for the same reason: there is no separate vocabulary for "this
+// Apply happened to be triggered by the profile selector".
 func (h *headerbarCtl) showEnableResult(res app.EnableResult, privOut string) {
-	if res.Report != nil {
-		if err := showResultDialog(h.topWindow, res.Report); err != nil {
-			h.showError(fmt.Sprintf("erro ao abrir resultado: %s", err))
-		} else if len(res.Report.Notices) > 0 {
-			if err := showNoticesDialog(h.topWindow, res.Report); err != nil {
-				h.showError(fmt.Sprintf("erro ao abrir avisos: %s", err))
-			}
-		}
+	if res.Report == nil && privOut == "" {
+		return
 	}
-	if privOut != "" {
-		if err := showPrivilegedOutputDialog(h.topWindow, privOut); err != nil {
-			h.showError(fmt.Sprintf("erro ao abrir resultado privilegiado: %s", err))
-		}
+	onRestartDocker := restartDockerAction(h.topWindow, h.runner)
+	if err := showApplyResultDialog(h.topWindow, res.Report, "", privOut, onRestartDocker); err != nil {
+		h.showError(fmt.Sprintf("erro ao abrir resultado: %s", err))
 	}
 }
 

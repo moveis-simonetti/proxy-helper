@@ -3,3 +3,4 @@
 
 # Air (live reload da GUI)
 tmp/
+/dist/

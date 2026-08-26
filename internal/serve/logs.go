@@ -7,7 +7,6 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 	"unicode/utf8"
 
@@ -320,45 +319,6 @@ func writeRow(bw *bufio.Writer, row []cell, widths []int, color bool) error {
 	return bw.WriteByte('\n')
 }
 
-// RenderStats prints an aggregate summary over the same data.
-func RenderStats(w io.Writer, entries []LogEntry) error {
-	var proxied, direct, errors int
-	var bytes int64
-	byHost := map[string]int{}
-	bytesByHost := map[string]int64{}
-
-	for _, e := range entries {
-		if e.Decision == "direct" {
-			direct++
-		} else {
-			proxied++
-		}
-		if e.Status >= 400 || e.Err != "" {
-			errors++
-		}
-		n := e.BytesIn + e.BytesOut
-		bytes += n
-		byHost[e.Host]++
-		bytesByHost[e.Host] += n
-	}
-
-	total := len(entries)
-	fmt.Fprintf(w, "requests: %d  (proxied %d, direct %d)\n", total, proxied, direct)
-	if total > 0 {
-		fmt.Fprintf(w, "errors:   %d (%.1f%%)\n", errors, float64(errors)*100/float64(total))
-	} else {
-		fmt.Fprintf(w, "errors:   0\n")
-	}
-	fmt.Fprintf(w, "traffic:  %s\n\n", humanBytes(bytes))
-
-	fmt.Fprintln(w, "top hosts by requests:")
-	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	for _, h := range topKeys(byHost, 10) {
-		fmt.Fprintf(tw, "  %s\t%d\t%s\n", h, byHost[h], humanBytes(bytesByHost[h]))
-	}
-	return tw.Flush()
-}
-
 func topKeys(counts map[string]int, n int) []string {
 	keys := make([]string, 0, len(counts))
 	for k := range counts {
@@ -386,5 +346,25 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%.1f kB", float64(n)/1024)
 	default:
 		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
+
+// EffectiveSince decides which timestamp journalctl's --since should get,
+// given what the user asked for on the command line and the cut-off stored
+// by "proxy logs clear". An empty result means no --since at all.
+//
+// The precedence exists because "clear" must not become a trap: a stored
+// cut-off silently outranking an explicit --since would make older entries
+// unreachable with no way to tell why. So an explicit --since wins outright,
+// and --all ignores both — either one is an escape hatch back to the full
+// journal.
+func EffectiveSince(userSince, cutoff string, all bool) string {
+	switch {
+	case all:
+		return ""
+	case userSince != "":
+		return userSince
+	default:
+		return cutoff
 	}
 }

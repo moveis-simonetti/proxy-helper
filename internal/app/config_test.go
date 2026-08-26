@@ -172,3 +172,77 @@ func TestSaveProfileGuardSeesTheProfilesOnDisk(t *testing.T) {
 		t.Errorf("resolve saw %v, want it to include the existing %q", seen, "corp")
 	}
 }
+
+// salvar is the shape every SaveProfile caller uses: a resolve function that
+// hands back the name and config to write.
+func salvar(t *testing.T, nome string, cfg proxy.Config) error {
+	t.Helper()
+	d := depsFor()
+	return SaveProfile(d, &proxy.Executor{}, func(map[string]proxy.Config) (string, proxy.Config, error) {
+		return nome, cfg, nil
+	})
+}
+
+func perfis(t *testing.T) *proxy.ProfileFile {
+	t.Helper()
+	pf, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatalf("LoadProfiles: %v", err)
+	}
+	return pf
+}
+
+// Saving the very first profile and having nothing happen leaves the user one
+// step short: the master switch stays off because there is no active profile
+// to turn on. Reported from a fresh install, where importing a PAC produced a
+// profile that then had to be activated by hand.
+func TestSaveProfileActivatesTheFirstOne(t *testing.T) {
+	isolateConfig(t, `{"profiles":{}}`)
+	if err := salvar(t, "Trabalho", proxy.Config{Host: "p", Port: "1"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if got := perfis(t).ActiveProfile; got != "Trabalho" {
+		t.Errorf("active_profile = %q, queria o primeiro perfil ativo", got)
+	}
+}
+
+// With a profile already saved, "nothing active" is a choice the user made —
+// turning the proxy on behind them because they saved a second profile would
+// be the opposite of helpful.
+func TestSaveProfileDoesNotActivateWhenOthersExist(t *testing.T) {
+	isolateConfig(t, `{"profiles":{"Casa":{"host":"c","port":"1"}}}`)
+	if err := salvar(t, "Trabalho", proxy.Config{Host: "p", Port: "1"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if got := perfis(t).ActiveProfile; got != "" {
+		t.Errorf("active_profile = %q, não deveria ativar nada", got)
+	}
+}
+
+// Editing the only profile you have must not switch the proxy on.
+func TestSaveProfileDoesNotActivateOnEdit(t *testing.T) {
+	isolateConfig(t, `{"profiles":{"Trabalho":{"host":"antigo","port":"1"}}}`)
+	if err := salvar(t, "Trabalho", proxy.Config{Host: "novo", Port: "1"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	pf := perfis(t)
+	if pf.ActiveProfile != "" {
+		t.Errorf("active_profile = %q, editar não deveria ativar", pf.ActiveProfile)
+	}
+	if pf.Profiles["Trabalho"].Host != "novo" {
+		t.Errorf("a edição não foi gravada: %+v", pf.Profiles["Trabalho"])
+	}
+}
+
+// Someone who deliberately turned the proxy off keeps it off. The reserved
+// slot occupies ActiveProfile while in use, so this also covers "the user was
+// mid-way through proxy set --via-local".
+func TestSaveProfileLeavesADeliberateChoiceAlone(t *testing.T) {
+	isolateConfig(t, `{"active_profile":"_current","profiles":{"_current":{"host":"a","port":"1"}}}`)
+	if err := salvar(t, "Trabalho", proxy.Config{Host: "p", Port: "1"}); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if got := perfis(t).ActiveProfile; got != proxy.CurrentProfileName {
+		t.Errorf("active_profile = %q, deveria continuar %q", got, proxy.CurrentProfileName)
+	}
+}

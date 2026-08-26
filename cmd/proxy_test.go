@@ -275,7 +275,7 @@ func TestSetWithoutViaLocalClearsThePlumbingFlag(t *testing.T) {
 		"_current":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
 
 	cfg := proxy.Config{Scheme: "http", Host: "other.corp", Port: "3128"}
-	if err := applyConfig(cfg, []string{"all"}, false, false); err != nil {
+	if err := applyConfig("", cfg, []string{"all"}, false, false, false); err != nil {
 		t.Fatalf("applyConfig: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestPartialUnsetKeepsThePlumbingFlag(t *testing.T) {
 	const cfgJSON = `{"via_local":true,"profiles":{}}`
 
 	h := newHarness(t, cfgJSON)
-	if err := clearTargets([]string{"git"}, false); err != nil {
+	if err := clearTargets([]string{"git"}, false, false); err != nil {
 		t.Fatalf("clearTargets(git): %v", err)
 	}
 	if pf := h.profiles(t); !pf.ViaLocal {
@@ -298,7 +298,7 @@ func TestPartialUnsetKeepsThePlumbingFlag(t *testing.T) {
 	}
 
 	h2 := newHarness(t, cfgJSON)
-	if err := clearTargets([]string{"all"}, false); err != nil {
+	if err := clearTargets([]string{"all"}, false, false); err != nil {
 		t.Fatalf("clearTargets(all): %v", err)
 	}
 	if pf := h2.profiles(t); pf.ViaLocal {
@@ -522,6 +522,80 @@ func TestDockerTargetsGetABridgeAddress(t *testing.T) {
 	}
 }
 
+// TestRestartDockerFlagRequiredToRestart is the regression test for the
+// rule that protects other people's containers: a plain "proxy set" must
+// never restart Docker on its own, even though dockerd just wrote a drop-in
+// that needs a restart to take effect. Only --restart-docker may trigger it.
+func TestRestartDockerFlagRequiredToRestart(t *testing.T) {
+	h := newHarness(t, "")
+	h.targets = []*fakeTarget{{name: "dockerd"}}
+
+	cfg := proxy.Config{Scheme: "http", Host: "proxy.corp", Port: "8080"}
+	out := captureStdout(t, func() {
+		if err := applyConfig("", cfg, []string{"dockerd"}, true, false, false); err != nil {
+			t.Fatalf("applyConfig: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "would run (sudo): systemctl restart docker") {
+		t.Errorf("without --restart-docker, docker must not be restarted; got:\n%s", out)
+	}
+}
+
+// TestRestartDockerFlagRestartsAfterSet is
+// TestRestartDockerFlagRequiredToRestart's counterpart: with the flag, and
+// only after dockerd itself was successfully applied, the daemon is
+// restarted.
+func TestRestartDockerFlagRestartsAfterSet(t *testing.T) {
+	h := newHarness(t, "")
+	h.targets = []*fakeTarget{{name: "dockerd"}}
+
+	cfg := proxy.Config{Scheme: "http", Host: "proxy.corp", Port: "8080"}
+	out := captureStdout(t, func() {
+		if err := applyConfig("", cfg, []string{"dockerd"}, true, false, true); err != nil {
+			t.Fatalf("applyConfig: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "would run (sudo): systemctl restart docker") {
+		t.Errorf("with --restart-docker, expected a restart preview; got:\n%s", out)
+	}
+}
+
+// TestRestartDockerFlagRequiredToRestartOnUnset mirrors
+// TestRestartDockerFlagRequiredToRestart for "proxy unset".
+func TestRestartDockerFlagRequiredToRestartOnUnset(t *testing.T) {
+	h := newHarness(t, "")
+	h.targets = []*fakeTarget{{name: "dockerd"}}
+
+	out := captureStdout(t, func() {
+		if err := clearTargets([]string{"dockerd"}, true, false); err != nil {
+			t.Fatalf("clearTargets: %v", err)
+		}
+	})
+
+	if strings.Contains(out, "would run (sudo): systemctl restart docker") {
+		t.Errorf("without --restart-docker, docker must not be restarted; got:\n%s", out)
+	}
+}
+
+// TestRestartDockerFlagRestartsAfterUnset mirrors
+// TestRestartDockerFlagRestartsAfterSet for "proxy unset".
+func TestRestartDockerFlagRestartsAfterUnset(t *testing.T) {
+	h := newHarness(t, "")
+	h.targets = []*fakeTarget{{name: "dockerd"}}
+
+	out := captureStdout(t, func() {
+		if err := clearTargets([]string{"dockerd"}, true, true); err != nil {
+			t.Fatalf("clearTargets: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "would run (sudo): systemctl restart docker") {
+		t.Errorf("with --restart-docker, expected a restart preview; got:\n%s", out)
+	}
+}
+
 // TestPartialSetKeepsTheViaLocalFlag guards the state lie: reconfiguring only
 // some targets must not clear the flag, because the ones left alone still
 // depend on the daemon and "proxy status" must keep warning about it.
@@ -531,14 +605,14 @@ func TestPartialSetKeepsTheViaLocalFlag(t *testing.T) {
 	resetProfileFlags(t)
 
 	cfg := proxy.Config{Scheme: "http", Host: "192.168.0.9", Port: "3128"}
-	if err := applyConfig(cfg, []string{"dockerd", "docker-config"}, false, false); err != nil {
+	if err := applyConfig("", cfg, []string{"dockerd", "docker-config"}, false, false, false); err != nil {
 		t.Fatalf("applyConfig: %v", err)
 	}
 	if pf := h.profiles(t); !pf.ViaLocal {
 		t.Error("a partial set cleared via_local while other targets still point at the daemon")
 	}
 
-	if err := applyConfig(cfg, []string{"all"}, false, false); err != nil {
+	if err := applyConfig("", cfg, []string{"all"}, false, false, false); err != nil {
 		t.Fatalf("applyConfig all: %v", err)
 	}
 	if pf := h.profiles(t); pf.ViaLocal {
@@ -585,5 +659,117 @@ func TestNextStepHintIsRunnable(t *testing.T) {
 	}}
 	if got = nextStepHint(reserved); strings.Contains(got, proxy.CurrentProfileName) {
 		t.Errorf("the reserved profile leaked into user-facing advice: %s", got)
+	}
+}
+
+// The bridge was one-way: install only ever wrote docker_bridge=true, so a
+// user who enabled it had no supported way back. The GUI needs a switch that
+// works in both directions, and a switch that cannot switch back would be an
+// interface lying about what it does.
+//
+// applyDockerBridgePreference (not the full "proxy serve install" command)
+// is exercised directly here: InstallUnit shells out to the real systemctl
+// even under DryRun's "would run" logging is fine, but a *testing.T run must
+// never touch the developer's actual proxy-helper.service. Isolating the
+// decision-and-persist step lets these tests assert on config.json without
+// going anywhere near systemctl.
+func TestInstallWithNoDockerBridgeClearsTheFlag(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "proxy-helper", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"docker_bridge": true, "profiles": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	desired, err := applyDockerBridgePreference(pf, false /* --docker-bridge */, true /* --no-docker-bridge */, false /* dry-run */)
+	if err != nil {
+		t.Fatalf("applyDockerBridgePreference: %v", err)
+	}
+	if desired {
+		t.Errorf("desired = true, want false")
+	}
+
+	reloaded, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.DockerBridge {
+		t.Errorf("config.json still has docker_bridge=true after --no-docker-bridge")
+	}
+}
+
+func TestNoDockerBridgeRefusesToCombineWithDockerBridge(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "proxy-helper", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"docker_bridge": true, "profiles": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = applyDockerBridgePreference(pf, true /* --docker-bridge */, true /* --no-docker-bridge */, false /* dry-run */)
+	if err == nil {
+		t.Fatal("expected an error when both flags are set, got nil")
+	}
+	if got, want := err.Error(), "--docker-bridge and --no-docker-bridge are mutually exclusive"; got != want {
+		t.Errorf("error = %q, want %q", got, want)
+	}
+
+	reloaded, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.DockerBridge {
+		t.Errorf("config.json changed even though the flags conflicted")
+	}
+}
+
+// A plain reinstall (e.g. to change the port) must not silently turn the
+// bridge off — that is the behaviour this flag exists to make explicit.
+func TestPlainInstallKeepsTheBridgeOn(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "proxy-helper", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"docker_bridge": true, "profiles": {}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	desired, err := applyDockerBridgePreference(pf, false /* --docker-bridge */, false /* --no-docker-bridge */, false /* dry-run */)
+	if err != nil {
+		t.Fatalf("applyDockerBridgePreference: %v", err)
+	}
+	if !desired {
+		t.Errorf("desired = false, want true (neither flag was passed, saved preference must win)")
+	}
+
+	reloaded, err := proxy.LoadProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.DockerBridge {
+		t.Errorf("config.json lost docker_bridge=true after a plain reinstall with no flags")
 	}
 }

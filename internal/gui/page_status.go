@@ -12,6 +12,7 @@ import (
 	"proxy-helper/internal/serve"
 
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/gotk3/gotk3/pango"
 )
 
 // statusDeps builds the app.Deps the Status page needs. Collect and Elevate
@@ -38,11 +39,18 @@ type statusPageRow struct {
 	// must never be routed into the pkexec-elevated call, regardless of
 	// root. See selectedNames.
 	sessionScoped bool
-	checkbox      *gtk.CheckButton
-	lock          *gtk.Label
-	nameLbl       *gtk.Label
-	state         *gtk.Label
-	detail        *gtk.Label
+	// applied and unknown remember the last read, so updateSummary can count
+	// without re-deriving state from the label text. They are NOT opposites:
+	// "requer sudo" means the read failed, so the target is neither known to
+	// be applied nor known to be unapplied.
+	applied bool
+	unknown bool
+
+	checkbox *gtk.CheckButton
+	lock     *gtk.Label
+	nameLbl  *gtk.Label
+	state    *gtk.Label
+	detail   *gtk.Label
 }
 
 // statusPage owns the widgets of the Status page: one grid row per target,
@@ -57,16 +65,22 @@ type statusPage struct {
 
 	rows           []*statusPageRow
 	plainReloadBtn *gtk.Button
-	reloadBtn      *gtk.Button
 	summary        *gtk.Label
 	viaLocal       *gtk.CheckButton
+
+	// elevationBar tells the user some target could not be read without
+	// sudo and offers the one button that does that read. Hidden by
+	// default (SetNoShowAll); see applyStatuses.
+	elevationBar     *gtk.InfoBar
+	elevationLbl     *gtk.Label
+	elevationSudoBtn *gtk.Button
 
 	applyBtn    *gtk.Button
 	clearBtn    *gtk.Button
 	simulateBtn *gtk.Button
 	resultLbl   *gtk.Label
 
-	// lastStatuses is the most recent read, kept so "Recarregar com sudo"
+	// lastStatuses is the most recent read, kept so the elevation bar's "Ler com sudo"
 	// can re-check exactly the targets that still need it instead of
 	// re-reading everything.
 	lastStatuses []proxy.Status
@@ -97,7 +111,7 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	grid.SetRowSpacing(spaceTight)
 	grid.SetColumnSpacing(spaceRelated)
 
-	headers := []string{"", "", "Target", "Estado", "Detalhe"}
+	headers := []string{"Aplicar em", "Sudo", "Alvo", "Situação", "Detalhe"}
 	for col, text := range headers {
 		lbl, err := gtk.LabelNew("")
 		if err != nil {
@@ -108,6 +122,30 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		grid.Attach(lbl, col, 0, 1, 1)
 	}
 
+	// Selection shortcuts row, directly under the headers: "Todos"/"Nenhum"
+	// mark/unmark the checkboxes the user could already tick one by one —
+	// see setAllSelected for why an unavailable target's checkbox is left
+	// alone either way.
+	selectAllBtn, err := gtk.ButtonNewWithLabel("Todos")
+	if err != nil {
+		return nil, err
+	}
+	selectAllBtn.Connect("clicked", func() { sp.setAllSelected(true) })
+
+	selectNoneBtn, err := gtk.ButtonNewWithLabel("Nenhum")
+	if err != nil {
+		return nil, err
+	}
+	selectNoneBtn.Connect("clicked", func() { sp.setAllSelected(false) })
+
+	selectionRow, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
+	if err != nil {
+		return nil, err
+	}
+	selectionRow.PackStart(selectAllBtn, false, false, 0)
+	selectionRow.PackStart(selectNoneBtn, false, false, 0)
+	grid.Attach(selectionRow, 0, 1, len(headers), 1)
+
 	targets := proxy.AllTargets()
 	sp.rows = make([]*statusPageRow, 0, len(targets))
 	for i, t := range targets {
@@ -115,7 +153,7 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		if err != nil {
 			return nil, err
 		}
-		top := i + 1
+		top := i + 2
 		grid.Attach(row.checkbox, 0, top, 1, 1)
 		grid.Attach(row.lock, 1, top, 1, 1)
 		grid.Attach(row.nameLbl, 2, top, 1, 1)
@@ -127,6 +165,15 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		sp.rows = append(sp.rows, row)
 	}
 
+	elevationBar, elevationLbl, elevationSudoBtn, err := newElevationBar(func() { sp.reloadWithSudo() })
+	if err != nil {
+		return nil, err
+	}
+	win.StatusPage.PackStart(elevationBar, false, false, 0)
+	sp.elevationBar = elevationBar
+	sp.elevationLbl = elevationLbl
+	sp.elevationSudoBtn = elevationSudoBtn
+
 	scroller.Add(grid)
 	win.StatusPage.PackStart(scroller, true, true, 0)
 
@@ -136,11 +183,30 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	}
 	win.StatusPage.PackStart(sep, false, false, 0)
 
-	footer, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceRelated)
+	// One line describing the selection — count, how many are already
+	// applied, how many could not be read, and how many will cost a
+	// password. It used to be two sentences in two strips, the second
+	// sharing a row with the buttons and wrapping onto a second line.
+	summary, err := gtk.LabelNew("")
 	if err != nil {
 		return nil, err
 	}
-	footer.SetMarginTop(spaceRelated)
+	summary.SetXAlign(0)
+	summary.SetMarginTop(spaceRelated)
+	if ctx, err := summary.GetStyleContext(); err == nil {
+		ctx.AddClass("dim-label")
+	}
+	win.StatusPage.PackStart(summary, false, false, 0)
+	sp.summary = summary
+
+	// One control strip: the only option on the left, every button on the
+	// right. Recarregar used to sit alone on a strip of its own, which read
+	// as a different kind of thing than the other three — it is not.
+	actions, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceRelated)
+	if err != nil {
+		return nil, err
+	}
+	actions.SetMarginTop(spaceRelated)
 
 	viaLocal, err := gtk.CheckButtonNew()
 	if err != nil {
@@ -150,84 +216,38 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	if err != nil {
 		return nil, err
 	}
-	footer.PackStart(viaLocal, false, false, 0)
-	footer.PackStart(viaLocalLbl, false, false, 0)
+	actions.PackStart(viaLocal, false, false, 0)
+	actions.PackStart(viaLocalLbl, false, false, 0)
 	sp.viaLocal = viaLocal
 
-	summary, err := gtk.LabelNew("")
+	// The buttons live in their own box so PackEnd right-aligns the group
+	// while keeping them in reading order inside it.
+	buttons, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
 	if err != nil {
 		return nil, err
 	}
-	footer.PackStart(summary, true, true, 0)
-	sp.summary = summary
 
-	// The two reload buttons share one small Box so they read as a group
-	// ("reload, plain or with sudo") instead of two unrelated, seemingly
-	// duplicate buttons. Grouping is the only change here — neither button's
-	// own behaviour or visibility handling moves.
-	reloadBox, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
-	if err != nil {
-		return nil, err
-	}
-	reloadBox.SetSpacing(spaceTight)
-
-	// Plain reload: always visible, independent of whether any target needs
-	// elevation. Without it, a Collect error (applyStatuses paints every row
-	// "erro" and disables every checkbox and button) has no way back short
-	// of restarting the whole app, since load() otherwise only ever runs
-	// once, at setup.
+	// Plain reload: the only reload button, always visible, independent of
+	// whether any target needs elevation. Without it, a Collect error
+	// (applyStatuses paints every row "erro" and disables every checkbox and
+	// button) has no way back short of restarting the whole app, since
+	// load() otherwise only ever runs once, at setup. The elevated read
+	// lives in elevationBar instead of a second, easily-confused button —
+	// see newElevationBar.
 	plainReloadBtn, err := gtk.ButtonNewWithLabel("Recarregar")
 	if err != nil {
 		return nil, err
 	}
 	plainReloadBtn.Connect("clicked", func() { sp.load() })
-	reloadBox.PackStart(plainReloadBtn, false, false, 0)
+	buttons.PackStart(plainReloadBtn, false, false, 0)
 	sp.plainReloadBtn = plainReloadBtn
-
-	reloadBtn, err := gtk.ButtonNewWithLabel("Recarregar com sudo")
-	if err != nil {
-		return nil, err
-	}
-	// The button only makes sense once a read reveals a target that needs
-	// elevation, which happens asynchronously after the first load. Hidden
-	// at construction time; setNoShowAll keeps a later ShowAll() on the
-	// window from reasserting visibility before that first result lands.
-	// Packing it into reloadBox does not affect this: NoShowAll is a
-	// per-widget flag GTK checks on the widget itself when ShowAllRecursive
-	// walks the container, not something the parent Box can override.
-	reloadBtn.SetNoShowAll(true)
-	reloadBtn.SetVisible(false)
-	reloadBtn.Connect("clicked", func() { sp.reloadWithSudo() })
-	reloadBox.PackStart(reloadBtn, false, false, 0)
-	sp.reloadBtn = reloadBtn
-
-	footer.PackStart(reloadBox, false, false, 0)
-
-	win.StatusPage.PackStart(footer, false, false, 0)
-
-	actions, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
-	if err != nil {
-		return nil, err
-	}
-	actions.SetMarginTop(spaceRelated)
-	actions.SetHAlign(gtk.ALIGN_END)
-	actions.SetSpacing(spaceTight)
-
-	resultLbl, err := gtk.LabelNew("")
-	if err != nil {
-		return nil, err
-	}
-	resultLbl.SetXAlign(0)
-	resultLbl.SetLineWrap(true)
-	actions.PackStart(resultLbl, true, true, 0)
-	sp.resultLbl = resultLbl
 
 	clearBtn, err := gtk.ButtonNewWithLabel("Remover")
 	if err != nil {
 		return nil, err
 	}
 	clearBtn.Connect("clicked", func() { sp.clear() })
-	actions.PackStart(clearBtn, false, false, 0)
+	buttons.PackStart(clearBtn, false, false, 0)
 	sp.clearBtn = clearBtn
 
 	simulateBtn, err := gtk.ButtonNewWithLabel("Simular")
@@ -235,7 +255,7 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		return nil, err
 	}
 	simulateBtn.Connect("clicked", func() { sp.simulate() })
-	actions.PackStart(simulateBtn, false, false, 0)
+	buttons.PackStart(simulateBtn, false, false, 0)
 	sp.simulateBtn = simulateBtn
 
 	applyBtn, err := gtk.ButtonNewWithLabel("Aplicar")
@@ -243,10 +263,29 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		return nil, err
 	}
 	applyBtn.Connect("clicked", func() { sp.apply() })
-	actions.PackStart(applyBtn, false, false, 0)
+	buttons.PackStart(applyBtn, false, false, 0)
 	sp.applyBtn = applyBtn
 
+	actions.PackEnd(buttons, false, false, 0)
 	win.StatusPage.PackStart(actions, false, false, 0)
+
+	// Errors and refusals only — what a run actually did is enumerated
+	// per target in the result dialog, and echoing a count of it here was
+	// the second text competing for the button strip. Starts hidden and
+	// takes no space until something goes wrong, so the normal footer is
+	// two strips, not three. SetNoShowAll because the window's ShowAll
+	// would otherwise reveal an empty label.
+	resultLbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, err
+	}
+	resultLbl.SetXAlign(0)
+	resultLbl.SetLineWrap(true)
+	resultLbl.SetMarginTop(spaceRelated)
+	resultLbl.SetNoShowAll(true)
+	resultLbl.SetVisible(false)
+	win.StatusPage.PackStart(resultLbl, false, false, 0)
+	sp.resultLbl = resultLbl
 
 	// Disable the buttons that submit a job while one is already running:
 	// the runner is strictly one-job-at-a-time (see jobs.go), and a second
@@ -256,7 +295,7 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 	r.setBusyHandler(func(busy bool) {
 		enabled := !busy
 		sp.plainReloadBtn.SetSensitive(enabled)
-		sp.reloadBtn.SetSensitive(enabled)
+		sp.elevationSudoBtn.SetSensitive(enabled)
 		sp.applyBtn.SetSensitive(enabled)
 		sp.clearBtn.SetSensitive(enabled)
 		sp.simulateBtn.SetSensitive(enabled)
@@ -284,7 +323,7 @@ func newStatusPageRow(name string, root, sessionScoped bool) (*statusPageRow, er
 	// privileged pkexec path (see SessionScoped's doc comment and
 	// splitSessionAware in elevate.go) — it always runs in-process, so the
 	// padlock would be lying about a prompt that can never happen.
-	if root && !sessionScoped {
+	if promptsForPassword(root, sessionScoped) {
 		lock.SetMarkup("\U0001F512")
 		lock.SetTooltipText("requer privilégios de root para aplicar")
 	}
@@ -306,6 +345,13 @@ func newStatusPageRow(name string, root, sessionScoped bool) (*statusPageRow, er
 		return nil, err
 	}
 	detail.SetXAlign(0)
+	// Ellipsize instead of letting the column grow: apt's Detail is the whole
+	// apt.conf drop-in, a dozen lines long, and an unbounded label made that
+	// one row taller than the rest of the table put together. The full text
+	// stays reachable in the tooltip (see setDetail).
+	detail.SetEllipsize(pango.ELLIPSIZE_END)
+	detail.SetMaxWidthChars(64)
+	detail.SetSingleLineMode(true)
 
 	return &statusPageRow{
 		name:          name,
@@ -325,14 +371,37 @@ func newStatusPageRow(name string, root, sessionScoped bool) (*statusPageRow, er
 // resetSelection controls what happens to the checkbox's Active state: true
 // (the very first load) auto-selects every available target, matching the
 // original "everything on, uncheck what you don't want" default. false
-// (every reload after that — post-Apply/Clear, or "Recarregar com sudo")
+// (every reload after that — post-Apply/Clear, or the elevation bar's "Ler com sudo")
 // leaves whatever the user last chose alone, only forcing the box off when
 // the target just became unselectable. Without that distinction, a reload
 // after Apply/Clear silently re-checks every available target regardless of
 // what was actually selected — so a Clear right after an Apply of just one
 // target would wipe out every other target's settings too, not only the
 // one the user picked.
+// setDetail shows text in the Detalhe column, ellipsized to one line, and
+// keeps the untruncated original in the tooltip. Newlines are folded into
+// separators first: a multi-line Detail (apt writes one) would otherwise
+// still render as several lines despite the ellipsize, since Pango honours
+// the line breaks.
+func (row *statusPageRow) setDetail(text, color string) {
+	oneLine := strings.Join(strings.Fields(strings.ReplaceAll(text, "\n", " · ")), " ")
+	if color != "" {
+		row.detail.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, color, gtkEscape(oneLine)))
+	} else {
+		row.detail.SetText(oneLine)
+	}
+	// Tooltip only when it adds something: an unchanged short detail would
+	// just repeat itself on hover.
+	if oneLine != text {
+		row.detail.SetTooltipText(text)
+	} else {
+		row.detail.SetTooltipText("")
+	}
+}
+
 func (row *statusPageRow) applyRow(r statusRow, resetSelection bool) {
+	row.applied = r.Label == "aplicado"
+	row.unknown = r.Label == "requer sudo"
 	row.checkbox.SetSensitive(r.Selectable)
 	switch {
 	case !r.Selectable:
@@ -341,17 +410,17 @@ func (row *statusPageRow) applyRow(r statusRow, resetSelection bool) {
 		row.checkbox.SetActive(true)
 	}
 
-	row.state.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, r.Color, gtkEscape(r.Label)))
+	row.state.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s %s</span>`, r.Color, gtkEscape(r.Marker), gtkEscape(r.Label)))
 
 	detailColor := ""
-	if !r.Selectable {
+	if r.TintWholeRow {
 		detailColor = r.Color
 	}
 	if detailColor != "" {
-		row.detail.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, detailColor, gtkEscape(r.Detail)))
+		row.setDetail(r.Detail, detailColor)
 		row.nameLbl.SetMarkup(fmt.Sprintf(`<span foreground="%s">%s</span>`, detailColor, gtkEscape(r.Name)))
 	} else {
-		row.detail.SetText(r.Detail)
+		row.setDetail(r.Detail, "")
 		row.nameLbl.SetText(r.Name)
 	}
 }
@@ -384,8 +453,28 @@ func (sp *statusPage) load() {
 	sp.runner.submit(func() func() {
 		ex := &proxy.Executor{Escalation: proxy.EscalateNone, Out: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 		sts, err := app.Collect(statusDeps(), ex, []string{"all"}, false)
-		return func() { sp.applyStatuses(sts, err) }
+		// Read via_local alongside the statuses: the checkbox used to be a
+		// pure input that always started unchecked, even on a machine whose
+		// targets DO point at the local daemon. Applying from that state
+		// would write the real upstream credentials into all eleven targets
+		// and tear the plumbing down — the exact outcome --via-local exists
+		// to prevent. A LoadProfiles failure is not worth failing the whole
+		// read over; the checkbox just keeps its previous position.
+		viaLocal := false
+		if pf, pfErr := proxy.LoadProfiles(); pfErr == nil {
+			viaLocal = pf.ViaLocal
+		}
+		return func() {
+			sp.applyViaLocal(viaLocal)
+			sp.applyStatuses(sts, err)
+		}
 	})
+}
+
+// applyViaLocal puts the checkbox where config.json says the machine actually
+// is. Runs on the UI thread, from a runner delivery.
+func (sp *statusPage) applyViaLocal(on bool) {
+	sp.viaLocal.SetActive(on)
 }
 
 // reloadWithSudo re-checks only the targets app.NeedsElevation flagged,
@@ -416,11 +505,11 @@ func (sp *statusPage) applyStatuses(sts []proxy.Status, err error) {
 	if err != nil {
 		for _, row := range sp.rows {
 			row.state.SetMarkup(`<span foreground="#c64600">erro</span>`)
-			row.detail.SetText(err.Error())
+			row.setDetail(err.Error(), "")
 			row.checkbox.SetSensitive(false)
 			row.checkbox.SetActive(false)
 		}
-		sp.reloadBtn.SetVisible(false)
+		sp.setElevationBarVisible(0)
 		sp.updateSummary()
 		return
 	}
@@ -447,11 +536,97 @@ func (sp *statusPage) applyStatuses(sts []proxy.Status, err error) {
 		row.applyRow(rowFor(st, row.root), resetSelection)
 	}
 
-	sp.reloadBtn.SetVisible(app.NeedsElevation(sts))
+	needing := 0
+	for _, st := range sts {
+		if st.NeedsElevation {
+			needing++
+		}
+	}
+	sp.setElevationBarVisible(needing)
 	sp.updateSummary()
 }
 
-// updateSummary refreshes the "N de M targets selecionados" footer text
+// setElevationBarVisible shows or hides the elevation bar for n targets
+// that need sudo (0 hides it). SetVisible alone is not enough to reveal
+// it: elevationBar carries SetNoShowAll(true) so the window's own
+// ShowAll() at startup does not reassert it before a read confirms it is
+// needed, and per gtk_widget_show_all's contract that flag also stops a
+// later ShowAll() on the bar itself from descending into its children —
+// so the label and button must each be shown explicitly here, every time,
+// not just the container. See the elevationBar field's doc comment and
+// newElevationBar.
+func (sp *statusPage) setElevationBarVisible(n int) {
+	if n <= 0 {
+		sp.elevationBar.SetVisible(false)
+		return
+	}
+	sp.elevationLbl.SetText(elevationBarText(n))
+	sp.elevationLbl.SetVisible(true)
+	sp.elevationSudoBtn.SetVisible(true)
+	sp.elevationBar.ShowAll()
+	sp.elevationBar.SetVisible(true)
+}
+
+// newElevationBar builds the bar shown above the target table when
+// app.NeedsElevation reports at least one target could not be read as this
+// user: a short explanation plus the one button that re-reads with sudo
+// (app.Elevate, via reloadWithSudo). Replaces the old second "Recarregar
+// com sudo" button that sat next to the plain reload button with no
+// explanation of when it applied — two similarly-named buttons competing
+// for attention, one of which was invisible most of the time anyway.
+//
+// Hidden at construction (SetNoShowAll + SetVisible(false)): the window's
+// ShowAll() at startup must not reveal it before the first read confirms
+// it is needed. See setElevationBarVisible for why revealing it later
+// needs the children shown explicitly too.
+func newElevationBar(onReadWithSudo func()) (*gtk.InfoBar, *gtk.Label, *gtk.Button, error) {
+	bar, err := gtk.InfoBarNew()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bar.SetMessageType(gtk.MESSAGE_WARNING)
+	bar.SetNoShowAll(true)
+	bar.SetVisible(false)
+
+	content, err := bar.GetContentArea()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lbl.SetXAlign(0)
+	lbl.SetLineWrap(true)
+	content.PackStart(lbl, true, true, 0)
+
+	btn, err := gtk.ButtonNewWithLabel("Ler com sudo")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	btn.Connect("clicked", onReadWithSudo)
+	bar.AddActionWidget(btn, gtk.RESPONSE_NONE)
+
+	return bar, lbl, btn, nil
+}
+
+// setAllSelected checks or unchecks every selectable target's checkbox — the
+// "Todos"/"Nenhum" shortcut buttons above the table. A target whose checkbox
+// is insensitive (row.applyRow disables it when rowFor reports
+// !Selectable, i.e. unavailable) is left untouched either way: checking it
+// would add it to the next Aplicar/Remover, which would then fail on a
+// target that was never reachable to begin with.
+func (sp *statusPage) setAllSelected(selected bool) {
+	for _, row := range sp.rows {
+		if !row.checkbox.GetSensitive() {
+			continue
+		}
+		row.checkbox.SetActive(selected)
+	}
+	sp.updateSummary()
+}
+
+// updateSummary refreshes the "N de M alvos selecionados" footer text
 // from the checkboxes' current state.
 func (sp *statusPage) updateSummary() {
 	selected := 0
@@ -460,7 +635,29 @@ func (sp *statusPage) updateSummary() {
 			selected++
 		}
 	}
-	sp.summary.SetText(fmt.Sprintf("%d de %d targets selecionados", selected, len(sp.rows)))
+	applied, unknown, lockedSelected := 0, 0, 0
+	for _, row := range sp.rows {
+		on := row.checkbox.GetActive()
+		if row.applied {
+			applied++
+		}
+		if row.unknown {
+			unknown++
+		}
+		if on && promptsForPassword(row.root, row.sessionScoped) {
+			lockedSelected++
+		}
+		// A padlock on an unchecked row is misleading: that target will not
+		// be touched, so it will not cost a password. Dimming it makes the
+		// visible padlocks mean exactly "these are what the prompt is for".
+		if on {
+			row.lock.SetOpacity(1)
+		} else {
+			row.lock.SetOpacity(0.25)
+		}
+	}
+
+	sp.summary.SetText(summaryText(selected, len(sp.rows), applied, unknown, lockedSelected))
 }
 
 // selectedNames splits the checked targets into the user-level ones this
@@ -524,6 +721,7 @@ func activeProfile() (string, proxy.Config, *proxy.ProfileFile, error) {
 // thread only, from a runner delivery.
 func (sp *statusPage) showResult(msg string) {
 	sp.resultLbl.SetText(msg)
+	sp.resultLbl.SetVisible(msg != "")
 }
 
 // applyPrivileged runs the single pkexec call covering every privileged
@@ -662,7 +860,7 @@ func (sp *statusPage) apply() {
 	// to the checkboxes).
 	viaLocal := sp.viaLocal.GetActive()
 	if len(user) == 0 && len(privileged) == 0 {
-		sp.showResult("nenhum target selecionado")
+		sp.showResult("nenhum alvo selecionado")
 		return
 	}
 
@@ -717,7 +915,7 @@ func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
 		var userErr error
 		if len(user) > 0 {
 			ex := &proxy.Executor{Escalation: proxy.EscalateNone, Out: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
-			rep, userErr = app.Apply(statusDeps(), ex, cfg, user, viaLocal)
+			rep, userErr = app.Apply(statusDeps(), ex, profile, cfg, user, viaLocal)
 		}
 
 		var privMsg, privOut string
@@ -731,10 +929,24 @@ func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
 			}
 		}
 
+		// Only here is the whole selection in hand. app.Apply saw the
+		// user-level half and the reinvoked CLI saw the privileged half, so
+		// neither could tell whether every available target was rewritten —
+		// and the flag stayed on, ticking "Via daemon local" back the moment
+		// the page reloaded. Asked after both halves, over the union.
+		if !viaLocal {
+			if err := app.ClearViaLocal(append(append([]string{}, user...), privileged...)); err != nil {
+				if privMsg != "" {
+					privMsg += "; "
+				}
+				privMsg += fmt.Sprintf("aviso: não foi possível atualizar o estado do daemon local: %s", err)
+			}
+		}
+
 		return func() {
-			sp.showResult(joinNonEmpty(userSummary(rep, "aplicados"), privMsg))
+			sp.showResult("")
 			sp.load()
-			sp.showApplyClearResult(rep, userErr, privOut)
+			sp.showApplyClearResult(rep, userErr, privMsg, privOut)
 		}
 	})
 }
@@ -748,7 +960,7 @@ func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
 // elevateViaLocalCmds's doc comment). Replaced by the real result once both
 // calls finish.
 const twoDialogsWarning = "\"Via daemon local\": bridge do Docker habilitada e dockerd selecionado vão pedir a senha " +
-	"duas vezes — uma para o dockerd (endereço da bridge) e outra para os demais targets privilegiados (loopback)."
+	"duas vezes — uma para o dockerd (endereço da bridge) e outra para os demais alvos privilegiados (loopback)."
 
 // clear removes the current selection: same in-process/pkexec split as
 // apply, but through app.Clear and "proxy unset" — neither needs a profile.
@@ -773,64 +985,33 @@ func (sp *statusPage) clear() {
 		}
 
 		return func() {
-			sp.showResult(joinNonEmpty(userSummary(rep, "removidos"), privMsg))
+			sp.showResult("")
 			sp.load()
-			sp.showApplyClearResult(rep, userErr, privOut)
+			sp.showApplyClearResult(rep, userErr, privMsg, privOut)
 		}
 	})
 }
 
-// userSummary renders a one-line count of what app.Apply/app.Clear actually
-// did for the user-level targets: rep is nil when none were selected. See
-// appliedCount for why the count excludes skipped/failed results.
-func userSummary(rep *app.Report, verb string) string {
-	if rep == nil {
-		return ""
-	}
-	return fmt.Sprintf("usuário: %d %s", appliedCount(rep), verb)
-}
-
-// joinNonEmpty joins the non-empty parts with "; ", skipping any part that
-// is empty (e.g. userSummary when no user-level target was selected).
-func joinNonEmpty(parts ...string) string {
-	var out []string
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return strings.Join(out, "; ")
-}
-
-// showApplyClearResult opens the result dialog for the user-level part of
-// an apply/clear (rep is nil when no user-level target was selected), the
-// notices dialog afterwards if the operation raised any, and — since there
-// is no per-target Result for the privileged half, only the elevated CLI's
-// captured output — a dialog showing that output when privOut is non-empty.
-// Runs on the UI thread only, from a runner delivery. userErr covers
-// app.Apply/app.Clear itself failing outright (e.g. no active profile)
-// rather than a single target failing, which is instead one row in rep with
-// OutcomeFailed.
-func (sp *statusPage) showApplyClearResult(rep *app.Report, userErr error, privOut string) {
+// showApplyClearResult opens the single result dialog (showApplyResultDialog,
+// dialogs.go) for an apply/clear: per-target results, notices and the
+// elevated process's captured output, all in one modal instead of the three
+// that used to open in sequence. rep is nil when no user-level target was
+// selected (a privileged-only Apply/Clear); the dialog is skipped entirely
+// when there is neither a report nor privileged output to show. Runs on the
+// UI thread only, from a runner delivery. userErr covers app.Apply/app.Clear
+// itself failing outright (e.g. no active profile) rather than a single
+// target failing, which is instead one row in rep with OutcomeFailed.
+func (sp *statusPage) showApplyClearResult(rep *app.Report, userErr error, privMsg, privOut string) {
 	if userErr != nil {
 		sp.showResult(fmt.Sprintf("erro: %s", userErr))
 		return
 	}
-	if rep != nil {
-		if err := showResultDialog(sp.topWindow, rep); err != nil {
-			sp.showResult(fmt.Sprintf("erro ao abrir resultado: %s", err))
-			return
-		}
-		if len(rep.Notices) > 0 {
-			if err := showNoticesDialog(sp.topWindow, rep); err != nil {
-				sp.showResult(fmt.Sprintf("erro ao abrir avisos: %s", err))
-			}
-		}
+	if rep == nil && privMsg == "" && privOut == "" {
+		return
 	}
-	if privOut != "" {
-		if err := showPrivilegedOutputDialog(sp.topWindow, privOut); err != nil {
-			sp.showResult(fmt.Sprintf("erro ao abrir resultado privilegiado: %s", err))
-		}
+	onRestartDocker := restartDockerAction(sp.topWindow, sp.runner)
+	if err := showApplyResultDialog(sp.topWindow, rep, privMsg, privOut, onRestartDocker); err != nil {
+		sp.showResult(fmt.Sprintf("erro ao abrir resultado: %s", err))
 	}
 }
 
@@ -852,14 +1033,14 @@ func (sp *statusPage) simulate() {
 	}
 
 	sp.runner.submit(func() func() {
-		_, cfg, _, err := activeProfile()
+		profile, cfg, _, err := activeProfile()
 		if err != nil {
 			return func() { sp.showResult(err.Error()) }
 		}
 
 		buf := &bytes.Buffer{}
 		ex := &proxy.Executor{DryRun: true, Out: buf}
-		_, err = app.Apply(statusDeps(), ex, cfg, names, viaLocal)
+		_, err = app.Apply(statusDeps(), ex, profile, cfg, names, viaLocal)
 
 		if err != nil {
 			return func() { sp.showResult(fmt.Sprintf("erro: %s", err)) }

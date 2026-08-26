@@ -84,7 +84,7 @@ func noticeText(n app.Notice) string {
 	case app.NoticeUnreachablePassword:
 		return fmt.Sprintf(
 			"a senha deste perfil vem de %s, que só o proxy local consegue ler; "+
-				"os targets configurados diretamente ficam com um usuário sem senha e vão "+
+				"os alvos configurados diretamente ficam com um usuário sem senha e vão "+
 				"falhar ao autenticar. Use --via-local (veja \"proxy serve\") para manter a "+
 				"credencial em um só lugar.",
 			n.Args["source"])
@@ -97,6 +97,14 @@ func noticeText(n app.Notice) string {
 			n.Target)
 	case app.NoticeNeedsSudo:
 		return fmt.Sprintf("%s precisa de sudo; você pode ser solicitado a digitar sua senha.", n.Target)
+	case app.NoticeProfileAlreadyPlumbed:
+		return "Perfil trocado; os alvos já apontam para o proxy local, nada mudou neles."
+	case app.NoticeDockerNeedsRestart:
+		if n.Args["op"] == "clear" {
+			return "O Docker precisa ser reiniciado para a mudança valer."
+		}
+		return "O Docker precisa ser reiniciado para a mudança valer. " +
+			"Os containers em execução serão reiniciados."
 	default:
 		return fmt.Sprintf("aviso desconhecido para %s", n.Target)
 	}
@@ -114,7 +122,7 @@ func noticeTexts(rep *app.Report) []string {
 
 // collapseRepeatedLines collapses runs of two or more consecutive,
 // identical, non-blank lines into a single line annotated with the repeat
-// count. It exists for showPrivilegedOutputDialog (dialogs.go): the
+// count. It exists for buildPrivilegedOutputExpander (dialogs.go): the
 // elevated CLI's raw stdout/stderr is shown verbatim, and a command that
 // prints the same warning once per sub-invocation (as gsettings did for
 // the dconf failure this fixes elsewhere) can otherwise drown the one line

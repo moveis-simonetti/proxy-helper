@@ -112,6 +112,21 @@ func TestNoticeTextIsPortugueseNotAppText(t *testing.T) {
 			n:    app.Notice{Kind: app.NoticeNeedsSudo, Target: "apt"},
 			want: []string{"apt", "sudo"},
 		},
+		{
+			name: "profile already plumbed",
+			n:    app.Notice{Kind: app.NoticeProfileAlreadyPlumbed, Args: map[string]string{"profile": "work"}},
+			want: []string{"Perfil trocado"},
+		},
+		{
+			name: "docker needs restart, apply",
+			n:    app.Notice{Kind: app.NoticeDockerNeedsRestart, Target: "dockerd", Args: map[string]string{"op": "apply"}},
+			want: []string{"Docker precisa ser reiniciado", "containers em execução serão reiniciados"},
+		},
+		{
+			name: "docker needs restart, clear",
+			n:    app.Notice{Kind: app.NoticeDockerNeedsRestart, Target: "dockerd", Args: map[string]string{"op": "clear"}},
+			want: []string{"Docker precisa ser reiniciado"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -123,6 +138,32 @@ func TestNoticeTextIsPortugueseNotAppText(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestNoticeTextDockerNeedsRestartClearOmitsSecondSentence pins that "clear"
+// drops the "containers em execução serão reiniciados" sentence apply keeps
+// — clearing the drop-in does not restart anything running.
+func TestNoticeTextDockerNeedsRestartClearOmitsSecondSentence(t *testing.T) {
+	got := noticeText(app.Notice{Kind: app.NoticeDockerNeedsRestart, Target: "dockerd", Args: map[string]string{"op": "clear"}})
+	if strings.Contains(got, "em execução") {
+		t.Errorf("noticeText(op=clear) = %q, want it to omit the running-containers sentence", got)
+	}
+}
+
+// TestNoticeTextCoversEveryKind is the lock the task brief asked for: it
+// ranges over every NoticeKind value (using app.NumNoticeKinds, declared
+// right after the iota block so it tracks it automatically) and fails if any
+// of them falls through to noticeText's "aviso desconhecido" default. This
+// is what would have caught NoticeProfileAlreadyPlumbed going untranslated
+// since Phase 3A, and NoticeDockerNeedsRestart being added without a case.
+func TestNoticeTextCoversEveryKind(t *testing.T) {
+	for k := app.NoticeKind(0); k < app.NumNoticeKinds; k++ {
+		n := app.Notice{Kind: k, Target: "target", Args: map[string]string{"source": "x", "profile": "x", "op": "apply"}}
+		got := noticeText(n)
+		if strings.Contains(got, "aviso desconhecido") {
+			t.Errorf("noticeText for NoticeKind(%d) fell through to the unknown-notice default: %q", k, got)
+		}
 	}
 }
 

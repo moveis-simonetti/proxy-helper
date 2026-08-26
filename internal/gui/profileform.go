@@ -30,16 +30,9 @@ type profileFormValues struct {
 // the name that is allowed to collide with itself. Every rule here mirrors
 // what the CLI already refuses in cmd/proxy_profile.go; none is new.
 func validateProfileForm(v profileFormValues, existing map[string]proxy.Config, editing string) (name string, cfg proxy.Config, errMsg string) {
-	name = v.Name
-
-	if name == "" {
-		return "", proxy.Config{}, "O nome do perfil é obrigatório."
-	}
-	if name == proxy.CurrentProfileName {
-		return "", proxy.Config{}, fmt.Sprintf("%q é reservado para \"proxy set --via-local\". Escolha outro nome.", proxy.CurrentProfileName)
-	}
-	if _, exists := existing[name]; exists && name != editing {
-		return "", proxy.Config{}, fmt.Sprintf("Já existe um perfil chamado %q.", name)
+	name, errMsg = validateProfileName(v.Name, existing, editing)
+	if errMsg != "" {
+		return "", proxy.Config{}, errMsg
 	}
 
 	if v.Host == "" {
@@ -74,6 +67,24 @@ func validateProfileForm(v profileFormValues, existing map[string]proxy.Config, 
 		NoProxy:  noProxy,
 	}
 	return name, cfg, ""
+}
+
+// validateProfileName is the name-checking core of validateProfileForm,
+// factored out so importview.go's validateImportForm can reuse the same
+// three rules (blank, reserved, duplicate) without duplicating them. editing
+// is the name allowed to collide with itself (empty when there is no such
+// exception, as in the import form, which never edits an existing profile).
+func validateProfileName(name string, existing map[string]proxy.Config, editing string) (string, string) {
+	if name == "" {
+		return "", "O nome do perfil é obrigatório."
+	}
+	if name == proxy.CurrentProfileName {
+		return "", fmt.Sprintf("%q é reservado para \"proxy set --via-local\". Escolha outro nome.", proxy.CurrentProfileName)
+	}
+	if _, exists := existing[name]; exists && name != editing {
+		return "", fmt.Sprintf("Já existe um perfil chamado %q.", name)
+	}
+	return name, ""
 }
 
 // splitNoProxy turns a comma-separated list as typed into the slice the
@@ -233,4 +244,29 @@ func routeForSwitch(viaLocal bool) switchRoute {
 		return routeStateOnly
 	}
 	return routeRewritesTargets
+}
+
+// currentSlotLabel is how the reserved "_current" slot is named in the
+// headerbar selector. The slot is not a saved profile — it is the ad-hoc
+// config "proxy set --via-local" writes — so it never appears in the
+// profiles list, but it CAN be the active one, and then the selector has to
+// show something. Showing nothing (what happened before) left the selector
+// blank next to a master switch reading "Ativo", which is a contradiction.
+const currentSlotLabel = "Configuração avulsa"
+
+// headerbarExtraEntry returns the entry the headerbar selector needs beyond
+// the saved profiles, given whatever is active. There are exactly two such
+// cases and they are mutually exclusive with a saved profile being active:
+// nothing active at all, and the reserved slot being active. ok is false
+// when a saved profile is active, because then it IS the selection and a
+// second inert row alongside it would only be something confusing to pick.
+func headerbarExtraEntry(active string) (id, label string, ok bool) {
+	switch active {
+	case "":
+		return "", "Nenhum perfil", true
+	case proxy.CurrentProfileName:
+		return proxy.CurrentProfileName, currentSlotLabel, true
+	default:
+		return "", "", false
+	}
 }

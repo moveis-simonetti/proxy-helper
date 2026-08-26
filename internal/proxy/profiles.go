@@ -38,7 +38,25 @@ type ProfileFile struct {
 	// "proxy serve install" so that pointing targets at the loopback and
 	// reporting the daemon's address never guess a port the daemon does
 	// not actually use. Zero means DefaultLocalPort.
-	LocalPort int               `json:"local_port,omitempty"`
+	LocalPort int `json:"local_port,omitempty"`
+	// CloseToTray records the GUI-only preference that closing the main
+	// window hides it in the tray indicator instead of quitting. It lives
+	// here (rather than a second config file) because a second file would
+	// duplicate locking, atomic-write and path-resolution logic for one
+	// boolean. The CLI never reads or writes this field.
+	CloseToTray bool `json:"close_to_tray,omitempty"`
+	// LogsSince is the cut-off "proxy logs" and the GUI's Daemon page read
+	// from, as an RFC3339 timestamp. It is what "clearing the logs" means
+	// here, and the name is deliberate: nothing is deleted.
+	//
+	// The journal cannot delete one unit's entries — journalctl's
+	// --vacuum-* flags operate on journal FILES and ignore -u, so a real
+	// delete would take every user unit's logs with it. Recording where to
+	// start reading gets the user what they asked for (an empty table, a
+	// fresh start) without destroying anyone else's data, and it is
+	// reversible: "proxy logs --all" ignores it, and clearing the field
+	// brings everything back.
+	LogsSince string            `json:"logs_since,omitempty"`
 	Profiles  map[string]Config `json:"profiles"`
 }
 

@@ -7,11 +7,10 @@ import (
 )
 
 // window is the GUI's shell: the headerbar (profile selector, page
-// switcher, master switch) and the four-page stack. Status and Perfis carry
-// real content — StatusPage and ProfilesPage are the empty containers their
-// respective setup functions fill in. Daemon and Importar are still
-// placeholders ("Em breve") so navigation exists before their own plans
-// build them.
+// switcher, master switch) and the four-page stack. Status, Perfis, Daemon
+// and Importar all carry real content — StatusPage, ProfilesPage,
+// DaemonPage and ImportPage are the empty containers their respective setup
+// functions fill in.
 type window struct {
 	Window       *gtk.Window
 	Stack        *gtk.Stack
@@ -20,6 +19,22 @@ type window struct {
 	StatusLabel  *gtk.Label
 	StatusPage   *gtk.Box
 	ProfilesPage *gtk.Box
+	DaemonPage   *gtk.Box
+	ImportPage   *gtk.Box
+
+	// App is the GtkApplication whose loop is running. It is what "quit"
+	// has to go through since the move to GtkApplication: gtk.MainQuit only
+	// stops a gtk.Main() loop, and there is none any more — the tray's
+	// "Sair" silently stopped working because of exactly that.
+	App *gtk.Application
+
+	// Tray is nil until app.go's Run creates the indicator (newTray needs
+	// the window to already exist, to wire "Abrir proxy-helper"). Left nil
+	// on a desktop with no tray. The delete-event handler below reads it
+	// through the tray's nil-safe methods, never by checking it directly,
+	// so it works correctly in both windows: before Tray is set, and on a
+	// desktop where it is permanently nil.
+	Tray *tray
 }
 
 // masterLabel derives the Portuguese wording for the master switch's label
@@ -43,6 +58,11 @@ func newWindow(r *runner) (*window, error) {
 		return nil, err
 	}
 	win.SetTitle("proxy-helper")
+	// The window's own icon, shown by the task bar and the alt-tab switcher.
+	// SetIconName, not a file: the name resolves through the icon theme, so
+	// the package's installed icon is picked up and a build without it just
+	// falls back to the desktop's default rather than failing.
+	win.SetIconName(appIconName)
 	win.SetDefaultSize(1000, 720)
 
 	hb, err := gtk.HeaderBarNew()
@@ -125,18 +145,19 @@ func newWindow(r *runner) (*window, error) {
 	padPage(profilesPage)
 	stack.AddTitled(profilesPage, "profiles", "Perfis")
 
-	placeholders := []struct{ name, title string }{
-		{"daemon", "Daemon"},
-		{"import", "Importar"},
+	daemonPage, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, spaceTight)
+	if err != nil {
+		return nil, err
 	}
-	for _, p := range placeholders {
-		lbl, err := gtk.LabelNew("Em breve")
-		if err != nil {
-			return nil, err
-		}
-		padPage(lbl)
-		stack.AddTitled(lbl, p.name, p.title)
+	padPage(daemonPage)
+	stack.AddTitled(daemonPage, "daemon", "Daemon")
+
+	importPage, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, spaceTight)
+	if err != nil {
+		return nil, err
 	}
+	padPage(importPage)
+	stack.AddTitled(importPage, "import", "Importar")
 
 	switcher, err := gtk.StackSwitcherNew()
 	if err != nil {
@@ -155,10 +176,9 @@ func newWindow(r *runner) (*window, error) {
 	// some not.
 	win.Connect("destroy", func() {
 		r.stop()
-		gtk.MainQuit()
 	})
 
-	return &window{
+	w := &window{
 		Window:       win,
 		Stack:        stack,
 		ProfileCombo: profileCombo,
@@ -166,5 +186,50 @@ func newWindow(r *runner) (*window, error) {
 		StatusLabel:  statusLabel,
 		StatusPage:   statusPage,
 		ProfilesPage: profilesPage,
-	}, nil
+		DaemonPage:   daemonPage,
+		ImportPage:   importPage,
+	}
+
+	// "delete-event" fires on the window-manager close (the titlebar X,
+	// Alt+F4, ...) before "destroy" would. In GTK3 this signal returns
+	// gboolean, and TRUE CANCELS the close — confirmed by probing
+	// handleDeleteEvent directly, not by memory, since getting this
+	// backwards makes the window either impossible to close or impossible
+	// to hide.
+	win.Connect("delete-event", w.handleDeleteEvent)
+
+	return w, nil
+}
+
+// handleDeleteEvent is the "delete-event" callback, pulled out as a method
+// so it can be called directly in a probe/test without going through GTK's
+// signal machinery. Returning true here (and hiding instead of letting
+// "destroy" run) only happens when there IS a tray to bring the window back
+// from AND the user opted into that via the "Fechar esconde na bandeja"
+// item; both checks go through tray's nil-safe methods, so a tray-less
+// desktop (w.Tray == nil, read here only after app.go's Run has had a
+// chance to set it) always falls through to false and the pre-existing
+// "destroy" path runs unchanged. That fallthrough is the guard against the
+// worst failure mode this task defines: a window that hides with no icon
+// left to reopen it from.
+func (w *window) handleDeleteEvent() bool {
+	if w.Tray.hasIndicator() && w.Tray.closeToTray() {
+		w.Window.Hide()
+		return true
+	}
+	return false
+}
+
+// quit ends the application for real. Nil-safe on App so a window built
+// outside Run (a probe, a test) still terminates instead of panicking, and
+// gtk.MainQuit stays as the fallback for that case alone.
+func (w *window) quit() {
+	if w == nil {
+		return
+	}
+	if w.App != nil {
+		w.App.Quit()
+		return
+	}
+	gtk.MainQuit()
 }

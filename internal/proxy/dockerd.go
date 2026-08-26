@@ -44,7 +44,6 @@ func (t *dockerdTarget) Set(ex *Executor, cfg Config) error {
 	if err := ex.RunPrivileged("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	fmt.Println("  note: run `sudo systemctl restart docker` to apply (not done automatically, it restarts running containers)")
 	return nil
 }
 
@@ -55,7 +54,6 @@ func (t *dockerdTarget) Unset(ex *Executor) error {
 	if err := ex.RunPrivileged("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	fmt.Println("  note: run `sudo systemctl restart docker` to apply")
 	return nil
 }
 

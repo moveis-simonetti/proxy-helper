@@ -284,3 +284,70 @@ func TestStopBeforeStartDoesNotHang(t *testing.T) {
 		t.Fatal("stop() before start() hung")
 	}
 }
+
+// Every page registers a busy handler. A single-slot field meant the last one
+// registered silently won, and the other pages' buttons were never disabled
+// during a job — a bug that stays invisible until a second page exists, which
+// is exactly when it appeared here.
+func TestSetBusyHandlerNotifiesEveryRegisteredHandler(t *testing.T) {
+	var got []string
+	r := newRunner(func(f func()) { f() })
+	r.setBusyHandler(func(busy bool) {
+		if busy {
+			got = append(got, "primeira")
+		}
+	})
+	r.setBusyHandler(func(busy bool) {
+		if busy {
+			got = append(got, "segunda")
+		}
+	})
+	r.start()
+	defer r.stop()
+
+	done := make(chan struct{})
+	r.submit(func() func() { return func() { close(done) } })
+	<-done
+
+	if len(got) != 2 || got[0] != "primeira" || got[1] != "segunda" {
+		t.Errorf("handlers notificados = %v, queria [primeira segunda]; um handler perdido deixa a página dele sem proteção durante o job", got)
+	}
+}
+
+// A background poll must not disable the UI. Every job used to raise the
+// busy signal, which turns off the action buttons on every page — right for
+// a click the user is waiting on, wrong for a refresh nobody asked for. Once
+// the Daemon page began re-reading the journal every two seconds, the result
+// was every button in the window flickering on a two-second cycle.
+func TestSubmitQuietDoesNotRaiseTheBusySignal(t *testing.T) {
+	r := newRunner(func(f func()) { f() })
+	var seen []bool
+	r.setBusyHandler(func(busy bool) { seen = append(seen, busy) })
+	r.start()
+
+	done := make(chan struct{})
+	r.submitQuiet(func() func() { return func() { close(done) } })
+	<-done
+	r.stop()
+
+	if len(seen) != 0 {
+		t.Errorf("submitQuiet sinalizou ocupado: %v", seen)
+	}
+}
+
+// The other half of the same rule: a click still has to be acknowledged.
+func TestSubmitStillRaisesTheBusySignal(t *testing.T) {
+	r := newRunner(func(f func()) { f() })
+	var seen []bool
+	r.setBusyHandler(func(busy bool) { seen = append(seen, busy) })
+	r.start()
+
+	done := make(chan struct{})
+	r.submit(func() func() { return func() { close(done) } })
+	<-done
+	r.stop()
+
+	if len(seen) < 2 || !seen[0] || seen[len(seen)-1] {
+		t.Errorf("submit deveria sinalizar ocupado e depois livre, veio %v", seen)
+	}
+}

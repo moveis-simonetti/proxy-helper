@@ -18,11 +18,12 @@ import (
 )
 
 var (
-	servePort         int
-	serveQuiet        bool
-	serveDockerBridge bool
-	serveInstallDry   bool
-	serveUninstallDry bool
+	servePort           int
+	serveQuiet          bool
+	serveDockerBridge   bool
+	serveNoDockerBridge bool
+	serveInstallDry     bool
+	serveUninstallDry   bool
 )
 
 var proxyServeCmd = &cobra.Command{
@@ -151,21 +152,18 @@ var proxyServeInstallCmd = &cobra.Command{
 			if _, err := serve.DockerBridgeAddr(); err != nil {
 				return fmt.Errorf("--docker-bridge: %w", err)
 			}
-			if pf.DockerBridge != true && !serveInstallDry {
-				if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-					lpf.DockerBridge = true
-					return nil
-				}); err != nil {
-					return err
-				}
-				pf.DockerBridge = true
-			}
 		}
-		if err := serve.InstallUnit(ex, execPath, servePort, serveDockerBridge || pf.DockerBridge); err != nil {
+
+		dockerBridge, err := applyDockerBridgePreference(pf, serveDockerBridge, serveNoDockerBridge, serveInstallDry)
+		if err != nil {
+			return err
+		}
+
+		if err := serve.InstallUnit(ex, execPath, servePort, dockerBridge); err != nil {
 			return err
 		}
 		if !serveInstallDry {
-			addrs, err := serve.ListenAddrs(servePort, serveDockerBridge || pf.DockerBridge)
+			addrs, err := serve.ListenAddrs(servePort, dockerBridge)
 			if err != nil {
 				return err
 			}
@@ -174,6 +172,51 @@ var proxyServeInstallCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// resolveDockerBridge decides what Docker bridge value "proxy serve install"
+// should hand to InstallUnit, and whether the saved preference needs to
+// change to match. It has no side effects, which is what lets it be tested
+// without touching config.json or shelling out to systemctl: InstallUnit
+// runs systemctl for real even under a *testing.T, so the decision it
+// depends on has to be verifiable on its own.
+//
+// Without either flag, saved wins: that is what stops a reinstall done only
+// to change the port from silently turning someone's bridge off.
+func resolveDockerBridge(saved, dockerBridge, noDockerBridge bool) (desired bool, persist bool, err error) {
+	if dockerBridge && noDockerBridge {
+		return false, false, fmt.Errorf("--docker-bridge and --no-docker-bridge are mutually exclusive")
+	}
+	switch {
+	case noDockerBridge:
+		return false, saved != false, nil
+	case dockerBridge:
+		return true, saved != true, nil
+	default:
+		return saved, false, nil
+	}
+}
+
+// applyDockerBridgePreference resolves the Docker bridge value for this
+// install and, when it differs from what's saved, persists it under
+// WithProfileLock (skipped on a dry run, matching every other write in this
+// command). pf is updated in place so callers that already hold it (e.g. for
+// nextStepHint) see the new value too.
+func applyDockerBridgePreference(pf *proxy.ProfileFile, dockerBridge, noDockerBridge, dryRun bool) (bool, error) {
+	desired, persist, err := resolveDockerBridge(pf.DockerBridge, dockerBridge, noDockerBridge)
+	if err != nil {
+		return false, err
+	}
+	if persist && !dryRun {
+		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+			lpf.DockerBridge = desired
+			return nil
+		}); err != nil {
+			return false, err
+		}
+	}
+	pf.DockerBridge = desired
+	return desired, nil
 }
 
 // nextStepHint spells out the command that actually works from here. The
@@ -220,6 +263,7 @@ func init() {
 	proxyServeCmd.Flags().BoolVar(&serveQuiet, "quiet", false, "log only warnings and errors instead of every request")
 	proxyServeInstallCmd.Flags().IntVar(&servePort, "port", proxy.DefaultLocalPort, "port the service should listen on")
 	proxyServeInstallCmd.Flags().BoolVar(&serveDockerBridge, "docker-bridge", false, "also listen on the Docker bridge so build containers can reach the proxy; this lets every container on the machine use it")
+	proxyServeInstallCmd.Flags().BoolVar(&serveNoDockerBridge, "no-docker-bridge", false, "stop listening on the Docker bridge and clear the saved preference")
 	proxyServeInstallCmd.Flags().BoolVar(&serveInstallDry, "dry-run", false, "print what would change without applying it")
 	proxyServeUninstallCmd.Flags().BoolVar(&serveUninstallDry, "dry-run", false, "print what would change without applying it")
 

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
+	"proxy-helper/internal/proxy"
 	"proxy-helper/internal/serve"
 
 	"github.com/spf13/cobra"
@@ -18,7 +20,7 @@ var (
 	logsErrors bool
 	logsDirect bool
 	logsJSON   bool
-	logsStats  bool
+	logsAll    bool
 )
 
 var proxyLogsCmd = &cobra.Command{
@@ -28,16 +30,18 @@ var proxyLogsCmd = &cobra.Command{
 		"The daemon stores structured JSON, so these filters match on real " +
 		"fields rather than on text.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if logsFollow && logsStats {
-			return fmt.Errorf("--stats summarizes a finished batch and cannot be combined with --follow")
+		pf, err := proxy.LoadProfiles()
+		if err != nil {
+			return err
 		}
+		since := serve.EffectiveSince(logsSince, pf.LogsSince, logsAll)
 
 		journalArgs := []string{"--user", "-u", serve.UnitName, "-o", "json", "--no-pager"}
 		if logsFollow {
 			journalArgs = append(journalArgs, "-f")
 		}
-		if logsSince != "" {
-			journalArgs = append(journalArgs, "--since", logsSince)
+		if since != "" {
+			journalArgs = append(journalArgs, "--since", since)
 		} else {
 			journalArgs = append(journalArgs, "-n", fmt.Sprint(logsLines))
 		}
@@ -90,9 +94,6 @@ var proxyLogsCmd = &cobra.Command{
 
 		entries = serve.Filter(entries, opts)
 
-		if logsStats {
-			return serve.RenderStats(os.Stdout, entries)
-		}
 		return serve.RenderEntries(os.Stdout, entries, isTerminal(os.Stdout))
 	},
 }
@@ -115,6 +116,31 @@ func init() {
 	proxyLogsCmd.Flags().BoolVar(&logsErrors, "errors", false, "only failed requests")
 	proxyLogsCmd.Flags().BoolVar(&logsDirect, "direct", false, "only requests that bypassed the proxy")
 	proxyLogsCmd.Flags().BoolVar(&logsJSON, "json", false, "print raw journal JSON instead of the rendered view")
-	proxyLogsCmd.Flags().BoolVar(&logsStats, "stats", false, "print an aggregate summary instead of individual entries")
+	proxyLogsCmd.Flags().BoolVar(&logsAll, "all", false, "ignore the cut-off set by \"proxy logs clear\" and show everything the journal still holds")
+	proxyLogsCmd.AddCommand(proxyLogsClearCmd)
 	proxyCmd.AddCommand(proxyLogsCmd)
+}
+
+// proxyLogsClearCmd starts the log view over. It deletes nothing: the
+// journal cannot drop one unit's entries (journalctl's --vacuum-* flags act
+// on journal FILES and ignore -u), so a real delete would take every user
+// unit's logs with it. Recording where to start reading gives the same
+// result for this unit without destroying anyone else's data.
+var proxyLogsClearCmd = &cobra.Command{
+	Use:   "clear",
+	Short: "Hide entries older than now from \"proxy logs\"",
+	Long: "Record the current time as the point \"proxy logs\" starts reading from. " +
+		"Nothing is deleted: the journal keeps every entry until its own rotation " +
+		"removes it, and \"proxy logs --all\" still shows everything.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		now := time.Now().Format(time.RFC3339)
+		if err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+			pf.LogsSince = now
+			return nil
+		}); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout(), "logs hidden before %s (use \"proxy logs --all\" to see them again)\n", now)
+		return nil
+	},
 }

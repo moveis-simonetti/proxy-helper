@@ -266,3 +266,34 @@ func TestCanSaveIsTrueForAChangedEdit(t *testing.T) {
 		t.Error("canSave = false though the host changed")
 	}
 }
+
+// The blank selector next to an "Ativo" master switch was a real report: the
+// reserved slot is hidden from the profiles list, so SetActiveID("_current")
+// matched nothing and the combo settled on no row at all.
+func TestHeaderbarExtraEntryNamesTheReservedSlot(t *testing.T) {
+	id, label, ok := headerbarExtraEntry(proxy.CurrentProfileName)
+	if !ok {
+		t.Fatal("headerbarExtraEntry(_current) = not ok; the selector would show nothing")
+	}
+	if id != proxy.CurrentProfileName {
+		t.Errorf("id = %q, want %q", id, proxy.CurrentProfileName)
+	}
+	if label != currentSlotLabel {
+		t.Errorf("label = %q, want %q", label, currentSlotLabel)
+	}
+}
+
+func TestHeaderbarExtraEntryIsThePlaceholderWithNothingActive(t *testing.T) {
+	id, label, ok := headerbarExtraEntry("")
+	if !ok || id != "" || label != "Nenhum perfil" {
+		t.Errorf("headerbarExtraEntry(\"\") = %q, %q, %v", id, label, ok)
+	}
+}
+
+// A saved profile is its own selection; an extra row beside it would be an
+// inert option to pick.
+func TestHeaderbarExtraEntryIsAbsentForASavedProfile(t *testing.T) {
+	if _, _, ok := headerbarExtraEntry("Trabalho"); ok {
+		t.Error("headerbarExtraEntry(\"Trabalho\") = ok; a saved profile needs no extra row")
+	}
+}

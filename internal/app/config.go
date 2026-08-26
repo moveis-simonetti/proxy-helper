@@ -79,7 +79,33 @@ func SaveProfile(d Deps, ex *proxy.Executor, resolve func(existing map[string]pr
 			resolveErr = rErr
 			return nil
 		}
+		_, existed := pf.Profiles[name]
 		pf.Profiles[name] = cfg
+
+		// A first profile that is not activated leaves the user one step
+		// short of anything working: they saved it, nothing happened, and
+		// the master switch stays off because there is no active profile to
+		// turn on. Activating it here removes that step.
+		//
+		// Three conditions, and each one is what keeps this from being
+		// surprising:
+		//
+		//   !existed      — only a NEW profile. Editing the one profile you
+		//                   have must not switch the proxy on behind you.
+		//   ActiveProfile == "" — nothing is active. Someone who deliberately
+		//                   turned the proxy off and then saves a profile
+		//                   gets to stay off.
+		//   namedProfiles == 1 — it is the first one. With profiles already
+		//                   saved, "off" is a choice, not an empty state.
+		//
+		// The reserved "_current" slot does not count as a named profile
+		// (see namedProfiles): it belongs to "proxy set --via-local", not to
+		// anything the user saved. But it does occupy ActiveProfile when in
+		// use, so that case is already excluded by the second condition.
+		if !existed && pf.ActiveProfile == "" && namedProfiles(pf.Profiles) == 1 {
+			pf.ActiveProfile = name
+		}
+
 		wasActive = pf.ActiveProfile == name
 		return nil
 	})
@@ -94,4 +120,16 @@ func SaveProfile(d Deps, ex *proxy.Executor, resolve func(existing map[string]pr
 	}
 	// Outside the lock: flock does not nest within a process.
 	return d.ReloadDaemon(ex)
+}
+
+// namedProfiles counts the profiles a user actually saved, which excludes
+// the reserved slot "proxy set --via-local" writes.
+func namedProfiles(profiles map[string]proxy.Config) int {
+	n := 0
+	for name := range profiles {
+		if name != proxy.CurrentProfileName {
+			n++
+		}
+	}
+	return n
 }

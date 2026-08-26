@@ -156,7 +156,7 @@ func Enable(d Deps, ex *proxy.Executor, name string, targetNames []string, viaLo
 	}
 	// Apply runs after the lock above is released: it may take the profile
 	// lock itself, and flock does not nest within a process.
-	rep, err := Apply(d, ex, cfg, targetNames, false)
+	rep, err := Apply(d, ex, name, cfg, targetNames, false)
 	if err != nil {
 		return EnableResult{}, err
 	}

@@ -45,6 +45,12 @@ func renderNotice(w io.Writer, n app.Notice) {
 		fmt.Fprintf(w, "  note: %s will point at 127.0.0.1, which containers cannot reach.\n", n.Target)
 		fmt.Fprintln(w, "        Pulls will work, but build steps that need the network will fail.")
 		fmt.Fprintln(w, "        Run \"proxy serve install --docker-bridge\" to also listen where containers can reach.")
+	case app.NoticeDockerNeedsRestart:
+		if n.Args["op"] == "apply" {
+			fmt.Fprintln(w, "  note: run \"sudo systemctl restart docker\" to apply (not done automatically, it restarts running containers)")
+		} else {
+			fmt.Fprintln(w, "  note: run \"sudo systemctl restart docker\" to apply")
+		}
 	case app.NoticeNeedsSudo:
 		fmt.Fprintf(w, "  note: %s needs sudo, you may be prompted for your password\n", n.Target)
 	case app.NoticeProfileAlreadyPlumbed:

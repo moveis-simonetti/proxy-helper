@@ -57,6 +57,20 @@ const (
 	// state only: the targets already point at the local daemon, so nothing
 	// was written to them. Notice.Args carries "profile".
 	NoticeProfileAlreadyPlumbed
+	// NoticeDockerNeedsRestart warns that the dockerd target wrote (or
+	// removed) a systemd drop-in that only takes effect after
+	// `systemctl restart docker`, which is never done automatically because
+	// it disrupts running containers. It is raised only for the dockerd
+	// target, never for docker-config, which is read fresh on every command
+	// and needs no restart. Notice.Args carries "op": "apply" or "clear",
+	// since the two operations word the warning differently.
+	NoticeDockerNeedsRestart
+
+	// NumNoticeKinds is the number of NoticeKind values defined above. Kept
+	// right next to the iota block so it tracks it automatically; a
+	// presentation layer's exhaustiveness test can range over
+	// NoticeKind(0)..NumNoticeKinds-1 without hardcoding the count.
+	NumNoticeKinds
 )
 
 // Notice is a warning aimed at the user, carried as data so each front end

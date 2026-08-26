@@ -48,7 +48,10 @@ func warn(d Deps, rep *Report, n Notice) {
 // that is already holding that lock: flock does not nest within a process,
 // so a second acquisition on another descriptor blocks forever with no error
 // — a silent deadlock, not a visible one.
-func Apply(d Deps, ex *proxy.Executor, cfg proxy.Config, targetNames []string, viaLocal bool) (*Report, error) {
+// profileName is the saved profile cfg came from, or "" when cfg is ad-hoc
+// (typed into "proxy set --host ..." flags). It only matters on the viaLocal
+// path, which has to leave something active for the daemon to read.
+func Apply(d Deps, ex *proxy.Executor, profileName string, cfg proxy.Config, targetNames []string, viaLocal bool) (*Report, error) {
 	pf, err := proxy.LoadProfiles()
 	if err != nil {
 		return nil, err
@@ -56,9 +59,22 @@ func Apply(d Deps, ex *proxy.Executor, cfg proxy.Config, targetNames []string, v
 	cfg.NoProxy = proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
 
 	if viaLocal {
-		// An ad-hoc config is not a named profile, so it goes in the
-		// reserved slot: the daemon only ever reads active_profile.
-		pf.SetCurrent(cfg)
+		// The daemon only ever reads active_profile, so something has to be
+		// active here. A named profile activates under its own name; only a
+		// genuinely nameless config falls back to the reserved slot.
+		//
+		// Passing "" for a config that HAD a name is what used to demote it:
+		// "proxy set --profile Trabalho --via-local" — and every Aplicar on
+		// the GUI's Status page, which applies the active profile's config —
+		// rewrote active_profile to "_current", losing the name the user
+		// chose and leaving the GUI's profile selector with nothing to show.
+		if profileName != "" {
+			if err := pf.On(profileName); err != nil {
+				return nil, err
+			}
+		} else {
+			pf.SetCurrent(cfg)
+		}
 		return ApplyViaLocal(d, ex, pf, cfg, targetNames)
 	}
 
@@ -70,29 +86,18 @@ func Apply(d Deps, ex *proxy.Executor, cfg proxy.Config, targetNames []string, v
 	rep := &Report{}
 	noticeUnreachablePassword(d, rep, cfg)
 
-	// The targets are about to hold the real upstream again, so the plumbing
-	// flag must stop claiming they point at the loopback — but only when this
-	// covers every target. A partial set (say, just the Docker ones) leaves
-	// the rest plumbed, and clearing the flag there would silence the warning
-	// that those targets depend on a daemon that may not be running.
-	//
-	// SelectsAllAvailableTargets, not SelectsAllTargets: an unavailable
-	// target was never plumbed (eachTarget skips it outright), so it should
-	// not have to be named for this to count as complete. A caller that only
-	// ever offers the targets a user could actually select — the GUI, which
-	// sends explicit names and never "all" — would otherwise never satisfy
-	// SelectsAllTargets, since unavailable targets never turn up unchecked.
-	if !ex.DryRun && proxy.SelectsAllAvailableTargets(targetNames) {
-		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-			lpf.ViaLocal = false
-			return nil
-		}); err != nil {
+	// The targets are about to hold the real upstream again, so the
+	// plumbing flag must stop claiming they point at the loopback. See
+	// ClearViaLocal for why coverage decides that and not the apply alone.
+	if !ex.DryRun {
+		if err := ClearViaLocal(targetNames); err != nil {
 			return nil, err
 		}
 	}
 
 	applied := proxy.TargetConfig(cfg, false, 0)
 	setEach(d, rep, ex, targets, func(proxy.Target) proxy.Config { return applied })
+	noticeDockerNeedsRestart(d, rep, true)
 	return rep, nil
 }
 
@@ -203,6 +208,7 @@ func ApplyViaLocal(d Deps, ex *proxy.Executor, pf *proxy.ProfileFile, cfg proxy.
 		}
 		return loopback
 	})
+	noticeDockerNeedsRestart(d, rep, true)
 	return rep, nil
 }
 
@@ -241,6 +247,7 @@ func Clear(d Deps, ex *proxy.Executor, targetNames []string) (*Report, error) {
 	eachTarget(d, rep, ex, targets, func(t proxy.Target) error {
 		return t.Unset(ex)
 	}, OutcomeCleared, proxy.Target.RequiresRoot)
+	noticeDockerNeedsRestart(d, rep, false)
 	return rep, nil
 }
 
@@ -272,4 +279,56 @@ func noticeDockerLoopback(d Deps, rep *Report, targets []proxy.Target) {
 		warn(d, rep, Notice{Kind: NoticeDockerLoopback, Target: t.Name()})
 		return
 	}
+}
+
+// noticeDockerNeedsRestart flags the drop-in dockerd just wrote (or
+// removed): systemd only reads it after `systemctl restart docker`, and
+// that is never done automatically because it disrupts running containers.
+// It is scoped to the dockerd target alone — docker-config touches
+// ~/.docker/config.json, which every docker command reads fresh, so it never
+// needs a restart. applied distinguishes Apply (targets holds a successful
+// Set) from Clear (targets holds a successful Unset), since the two read
+// differently to the user.
+func noticeDockerNeedsRestart(d Deps, rep *Report, applied bool) {
+	wantOutcome := OutcomeCleared
+	op := "clear"
+	if applied {
+		wantOutcome = OutcomeApplied
+		op = "apply"
+	}
+	for _, res := range rep.Results {
+		if res.Target != "dockerd" || res.Outcome != wantOutcome {
+			continue
+		}
+		warn(d, rep, Notice{Kind: NoticeDockerNeedsRestart, Target: "dockerd", Args: map[string]string{"op": op}})
+		return
+	}
+}
+
+// ClearViaLocal drops the "targets point at the local daemon" flag, but only
+// when names cover every AVAILABLE target.
+//
+// Coverage is the condition because the flag describes reality, not
+// intention: rewriting some targets with the real upstream leaves the rest
+// still pointing at the daemon, and clearing the flag there would silence
+// the warning that those depend on a daemon which may not be running.
+// SelectsAllAvailableTargets, not SelectsAllTargets: an unavailable target
+// was never plumbed (eachTarget skips it outright), so it should not have to
+// be named for this to count as complete.
+//
+// It is exported because the GUI needs it. The GUI splits one apply into two
+// halves — user-level targets in-process, privileged ones through a
+// reinvoked CLI — so neither half ever covers everything on its own, and the
+// flag was never cleared: unticking "Via daemon local", applying, and
+// watching the box tick itself straight back on when the page reloaded.
+// Only the caller that made the whole selection can answer the coverage
+// question, so that caller gets to ask it.
+func ClearViaLocal(names []string) error {
+	if !proxy.SelectsAllAvailableTargets(names) {
+		return nil
+	}
+	return proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+		lpf.ViaLocal = false
+		return nil
+	})
 }

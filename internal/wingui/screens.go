@@ -31,7 +31,7 @@ const (
 
 var (
 	cardFill   = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-	cardStroke = color.NRGBA{R: 0xe7, G: 0xe7, B: 0xe7, A: 0xff}
+	cardStroke = color.NRGBA{R: 0xd1, G: 0xd1, B: 0xd1, A: 0xff}
 )
 
 // newBrandBar is the strip at the top of the main screen: the shield and the

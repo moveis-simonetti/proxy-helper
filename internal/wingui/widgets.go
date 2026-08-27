@@ -17,7 +17,7 @@ var (
 	colorForeground = typographyBlack
 	colorSuccess    = green600
 	colorError      = red600
-	colorMuted      = grey400
+	colorMuted      = grey500
 )
 
 // noticeBackgrounds are the tinted panels behind a message. Success is

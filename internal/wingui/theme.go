@@ -72,6 +72,7 @@ var (
 	orange500 = hex("#f5851a")
 
 	grey0   = hex("#ffffff")
+	grey500 = hex("#6d6d6d")
 	grey25  = hex("#f9f9fa")
 	grey50  = hex("#f6f6f6")
 	grey100 = hex("#e7e7e7")
@@ -120,19 +121,23 @@ func fluaLight(n fyne.ThemeColorName) color.Color {
 	case theme.ColorNameWarning:
 		return orange500
 	case theme.ColorNameButton:
-		return grey50
+		// grey.100, not grey.50: a secondary button in grey.50 sits on a
+		// #FBFBFB page and disappears. The canvas gives these buttons a
+		// visible border, which Fyne does not draw — so the fill carries
+		// the separation instead.
+		return grey100
 	case theme.ColorNameDisabledButton:
 		return grey100
 	case theme.ColorNameDisabled:
 		return grey300
 	case theme.ColorNamePlaceHolder:
-		return grey400
+		return grey500
 	case theme.ColorNameInputBackground:
 		return grey25
 	case theme.ColorNameInputBorder:
-		return grey200
+		return grey300
 	case theme.ColorNameSeparator:
-		return grey100
+		return grey200
 	case theme.ColorNameHeaderBackground:
 		return grey25
 	case theme.ColorNameMenuBackground:

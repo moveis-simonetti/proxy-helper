@@ -161,6 +161,28 @@ func redactArgs(args []string) []string {
 // captured is empty or whitespace-only, and always preserves err as the
 // wrapped cause so errors.Is/As still see through to it (exit codes, in
 // particular).
+// RunCaptured runs a command and, on failure, returns everything it printed
+// — stdout as well as stderr.
+//
+// Run alone is not enough for every program: schtasks reports its errors on
+// stdout, so a failure surfaced as a bare "exit status 1" with nothing to
+// act on. Whoever sees that error is the person least able to reproduce it.
+func (e *Executor) RunCaptured(name string, args ...string) error {
+	if e.DryRun {
+		fmt.Fprintf(e.out(), "  [dry-run] would run: %s %s\n", name, strings.Join(redactArgs(args), " "))
+		return nil
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	var captured bytes.Buffer
+	cmd.Stdout = io.MultiWriter(e.out(), &captured)
+	cmd.Stderr = io.MultiWriter(e.stderr(), &captured)
+	if err := cmd.Run(); err != nil {
+		return wrapWithStderr(err, captured.String())
+	}
+	return nil
+}
+
 func wrapWithStderr(err error, captured string) error {
 	msg := strings.TrimSpace(captured)
 	if msg == "" {

@@ -4,6 +4,9 @@ package proxy
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -99,4 +102,47 @@ func (e *Executor) RefreshWinINET() error {
 		}
 	}
 	return nil
+}
+
+// GetRegistryString reads a string value under HKCU. A missing value is not
+// an error: callers ask in order to find out.
+func (e *Executor) GetRegistryString(path, name string) (string, bool) {
+	key, err := registry.OpenKey(registry.CURRENT_USER, path, registry.QUERY_VALUE)
+	if err != nil {
+		return "", false
+	}
+	defer key.Close()
+	value, _, err := key.GetStringValue(name)
+	if err != nil {
+		return "", false
+	}
+	return value, true
+}
+
+// StartDetached launches a program that must outlive this process.
+//
+// The daemon used to be started through Task Scheduler, which needs a
+// permission a managed Windows account often does not have — "ERRO: Acesso
+// negado" with nothing the person can do about it. Starting the process
+// directly needs no permission at all: it is the same thing the user could
+// do by double-clicking the binary.
+//
+// DETACHED_PROCESS and no inherited handles are what make it survive: the
+// interface can be closed, and the proxy keeps answering.
+func (e *Executor) StartDetached(name string, args ...string) error {
+	if e.DryRun {
+		fmt.Fprintf(e.out(), "  [dry-run] would start: %s %s\n", name, strings.Join(redactArgs(args), " "))
+		return nil
+	}
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting %s: %w", name, err)
+	}
+	// Not waited on deliberately: this is a daemon, and Wait would block
+	// until it exits. Releasing lets this process forget about it.
+	return cmd.Process.Release()
 }

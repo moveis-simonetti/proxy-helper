@@ -76,25 +76,39 @@ type mainUI struct {
 	repaintStatus func()
 }
 
+// showSetup draws the first-run form. It is reused to add a profile: the
+// fields and the real probe are the same, so a second, nearly identical
+// screen would only be a copy that drifts.
+func (u *mainUI) showSetup(after func()) {
+	screen := newSetupScreen(func(cfg proxy.Config, user, pass string) {
+		if err := SaveFirstProfile(cfg, user, pass); err != nil {
+			dialogError(u.win, err)
+			return
+		}
+		u.profile = defaultProfileName
+		if after != nil {
+			after()
+			return
+		}
+		u.showStatus()
+	})
+	u.win.SetContent(container.NewPadded(screen.content))
+}
+
 func (u *mainUI) build() {
 	pf, err := proxy.LoadProfiles()
 	if err != nil || len(pf.Profiles) == 0 {
 		// Nothing configured: the first-run form is the whole app until it
 		// succeeds.
-		u.win.SetContent(container.NewPadded(newSetupScreen(u.onSetupDone).content))
+		u.showSetup(nil)
 		return
 	}
 	u.profile = pf.ActiveProfile
-	u.showStatus()
-}
-
-// onSetupDone is called once the probe accepted the credentials.
-func (u *mainUI) onSetupDone(cfg proxy.Config, user, pass string) {
-	if err := SaveFirstProfile(cfg, user, pass); err != nil {
-		dialogError(u.win, err)
-		return
+	// Read the machine before drawing: the person may have changed the
+	// Windows proxy settings by hand since the last run.
+	if on, name, err := CurrentState(); err == nil {
+		u.on, u.profile = on, name
 	}
-	u.profile = defaultProfileName
 	u.showStatus()
 }
 
@@ -130,11 +144,7 @@ func (u *mainUI) showStatus() {
 		state.Refresh()
 		toggle.Refresh()
 	}
-	toggle.OnTapped = func() {
-		u.on = !u.on
-		paint()
-		u.refreshTray()
-	}
+	toggle.OnTapped = func() { u.toggle(toggle, paint) }
 	u.repaintStatus = paint
 
 	profileRow := container.NewBorder(nil, nil,
@@ -142,13 +152,56 @@ func (u *mainUI) showStatus() {
 		widget.NewLabel(u.profileLabel()),
 	)
 
+	links := container.NewHBox(
+		widget.NewButton("Perfis", u.showProfiles),
+		widget.NewButton("Diagnóstico", u.showDiagnostics),
+	)
+	for _, o := range links.Objects {
+		if b, ok := o.(*widget.Button); ok {
+			b.Importance = widget.LowImportance
+		}
+	}
+
 	u.win.SetContent(container.NewPadded(container.NewVBox(
 		state, detail,
 		widget.NewSeparator(),
 		toggle,
 		profileRow,
+		widget.NewSeparator(),
+		links,
 	)))
 	paint()
+}
+
+// toggle applies the change and only then repaints.
+//
+// Repainting first and applying afterwards would show "Ligado" for the
+// moment it takes to write the settings, and would keep showing it if the
+// write failed — the window would be reporting an intention rather than the
+// state of the machine.
+func (u *mainUI) toggle(button *widget.Button, paint func()) {
+	button.Disable()
+	want := !u.on
+
+	go func() {
+		var err error
+		if want {
+			_, err = TurnOn(u.profile)
+		} else {
+			_, err = TurnOff(u.profile)
+		}
+
+		fyne.Do(func() {
+			button.Enable()
+			if err != nil {
+				dialogError(u.win, err)
+				return
+			}
+			u.on = want
+			paint()
+			u.refreshTray()
+		})
+	}()
 }
 
 func (u *mainUI) profileLabel() string {
@@ -179,12 +232,29 @@ func (u *mainUI) refreshTray() {
 	}
 	menu := fyne.NewMenu(windowTitle,
 		fyne.NewMenuItem(label, func() {
-			u.on = !u.on
-			if u.repaintStatus != nil {
-				u.repaintStatus()
-			}
-			u.refreshTray()
+			want := !u.on
+			go func() {
+				var err error
+				if want {
+					_, err = TurnOn(u.profile)
+				} else {
+					_, err = TurnOff(u.profile)
+				}
+				fyne.Do(func() {
+					if err != nil {
+						dialogError(u.win, err)
+						return
+					}
+					u.on = want
+					if u.repaintStatus != nil {
+						u.repaintStatus()
+					}
+					u.refreshTray()
+				})
+			}()
 		}),
+		fyne.NewMenuItemSeparator(),
+		autostartItem(u),
 		fyne.NewMenuItemSeparator(),
 		// Recommended even where left-click opens the window: not every
 		// desktop honours that.
@@ -192,6 +262,30 @@ func (u *mainUI) refreshTray() {
 		fyne.NewMenuItem("Sair", func() { u.app.Quit() }),
 	)
 	u.desk.SetSystemTrayMenu(menu)
+}
+
+// autostartItem is the "start with Windows" toggle.
+//
+// It lives in the tray rather than in a settings screen because the tray is
+// where this app is used, and because someone who wants to stop it starting
+// is most likely looking at the icon that just appeared.
+func autostartItem(u *mainUI) *fyne.MenuItem {
+	item := fyne.NewMenuItem("Iniciar com o Windows", nil)
+	item.Checked = AutostartEnabled()
+	item.Action = func() {
+		var err error
+		if item.Checked {
+			err = RemoveAutostart(executor())
+		} else {
+			err = InstallAutostart(executor())
+		}
+		if err != nil {
+			dialogError(u.win, err)
+			return
+		}
+		u.refreshTray()
+	}
+	return item
 }
 
 // dialogError shows a failure the person can act on. Saving is the one

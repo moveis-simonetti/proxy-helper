@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+
+	"proxy-helper/internal/proxy"
 )
 
 var (
@@ -19,7 +21,7 @@ var proxyUnsetCmd = &cobra.Command{
 }
 
 func init() {
-	proxyUnsetCmd.Flags().StringSliceVar(&unsetTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyUnsetCmd.Flags().StringSliceVar(&unsetTargets, "targets", []string{"all"}, proxy.TargetsFlagUsage())
 	proxyUnsetCmd.Flags().BoolVar(&unsetDryRun, "dry-run", false, "print what would change without applying it")
 	proxyUnsetCmd.Flags().BoolVar(&unsetRestartDocker, "restart-docker", false, "restart the Docker daemon after applying, so the change takes effect (this restarts running containers)")
 	proxyCmd.AddCommand(proxyUnsetCmd)

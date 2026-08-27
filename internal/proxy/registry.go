@@ -5,21 +5,18 @@ import (
 	"strings"
 )
 
-// AllTargets returns every known target, in a fixed, stable order.
-func AllTargets() []Target {
-	return []Target{
-		NewShellTarget(),
-		NewGitTarget(),
-		NewNpmTarget(),
-		NewVscodeTarget(),
-		NewGnomeTarget(),
-		NewKdeTarget(),
-		NewDockerdTarget(),
-		NewDockerConfigTarget(),
-		NewLxdTarget(),
-		NewSnapTarget(),
-		NewAptTarget(),
+// TargetsFlagUsage renders the --targets flag help from AllTargets(), so the
+// flag can never advertise a target the running platform does not have. It
+// used to be a string literal repeated in six init() functions; with a
+// per-platform registry, one of those copies would necessarily be wrong.
+func TargetsFlagUsage() string {
+	all := AllTargets()
+	names := make([]string, 0, len(all)+1)
+	for _, t := range all {
+		names = append(names, t.Name())
 	}
+	names = append(names, "all")
+	return "comma-separated targets (" + strings.Join(names, ",") + ")"
 }
 
 // SelectsAllTargets reports whether names covers every known target, either

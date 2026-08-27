@@ -35,8 +35,8 @@ var proxyStatusCmd = &cobra.Command{
 		case active:
 			fmt.Printf("daemon: active (profile %q)\n\n", pf.ActiveProfile)
 		case pf.ViaLocal:
-			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run \"systemctl --user start %s\"\n\n",
-				pf.EffectiveLocalPort(), serve.UnitName)
+			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run %q\n\n",
+				pf.EffectiveLocalPort(), serve.StartHint())
 		default:
 			fmt.Printf("daemon: not in use\n\n")
 		}

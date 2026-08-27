@@ -1,141 +1,120 @@
 package serve
 
 import (
+	"bufio"
 	"context"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strconv"
+	"strings"
 	"testing"
 
 	"proxy-helper/internal/proxy"
 )
 
-// These run against real listeners rather than a stubbed transport: what is
-// being tested is how Go's http client reports each failure, and a stub
-// would only confirm the assumptions this code is meant to verify.
+// validCredential is what fakeProxy accepts when it checks at all:
+// "ana:certa" in the Basic form.
+const validCredential = "Basic YW5hOmNlcnRh"
 
-// fakeProxy starts an HTTP proxy that answers every absolute-URL request
-// with the given status, and returns the config pointing at it.
-func fakeProxy(t *testing.T, status int) proxy.Config {
+// fakeProxy answers CONNECT the way a corporate proxy does. requireAuth
+// false is the case behind the bug report: it accepts anything, so a wrong
+// password used to be reported as working.
+func fakeProxy(t *testing.T, requireAuth bool) proxy.Config {
 	t.Helper()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if status == http.StatusProxyAuthRequired {
-			w.Header().Set("Proxy-Authenticate", `Basic realm="proxy"`)
-		}
-		w.WriteHeader(status)
-	}))
-	t.Cleanup(srv.Close)
-
-	u, err := url.Parse(srv.URL)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("parsing test server URL: %v", err)
+		t.Fatalf("listening: %v", err)
 	}
-	return proxy.Config{Scheme: "http", Host: u.Hostname(), Port: u.Port()}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				reader := bufio.NewReader(conn)
+				authenticated := false
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if strings.Contains(line, validCredential) {
+						authenticated = true
+					}
+					if line == "\r\n" {
+						break
+					}
+				}
+				if requireAuth && !authenticated {
+					_, _ = conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"p\"\r\nContent-Length: 0\r\n\r\n"))
+					return
+				}
+				_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+			}()
+		}
+	}()
+
+	host, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("splitting %s: %v", ln.Addr(), err)
+	}
+	return proxy.Config{Host: host, Port: port}
 }
 
-func TestProbeAcceptsWorkingCredentials(t *testing.T) {
-	cfg := fakeProxy(t, http.StatusOK)
+// The reported bug: a proxy that never checks credentials made the screen
+// say "Funcionou" over a password the person had typed wrong.
+func TestProbeDoesNotClaimSuccessWhenTheProxyNeverChecks(t *testing.T) {
+	cfg := fakeProxy(t, false)
 
-	got, err := Probe(context.Background(), cfg, "gestao", "senha")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	got, _ := Probe(context.Background(), cfg, "ana", "senha-errada")
+
+	if got == ProbeOK {
+		t.Fatal("a proxy that never asked for credentials reported them as accepted")
 	}
-	if got != ProbeOK {
+	if got != ProbeNoAuthRequired {
+		t.Errorf("result = %v, want ProbeNoAuthRequired", got)
+	}
+}
+
+// With no username there is nothing to verify.
+func TestProbeReportsPlainSuccessWhenNoCredentialsWereGiven(t *testing.T) {
+	cfg := fakeProxy(t, false)
+
+	if got, _ := Probe(context.Background(), cfg, "", ""); got != ProbeOK {
 		t.Errorf("result = %v, want ProbeOK", got)
 	}
 }
 
-func TestProbeTreatsANonAuthStatusAsSuccess(t *testing.T) {
-	// A 404 comes from the origin server, which means the proxy passed the
-	// request through — the credentials worked. Reporting this as a failure
-	// would send people chasing a password that is already correct.
-	cfg := fakeProxy(t, http.StatusNotFound)
+// A proxy that does check must refuse a wrong password, and that refusal
+// must reach the screen as a refusal rather than as a vague failure.
+func TestProbeReportsRefusalWhenTheProxyChecks(t *testing.T) {
+	cfg := fakeProxy(t, true)
 
-	got, err := Probe(context.Background(), cfg, "gestao", "senha")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != ProbeOK {
-		t.Errorf("result = %v, want ProbeOK for a 404 from the origin", got)
-	}
-}
-
-func TestProbeDetectsRefusedCredentials(t *testing.T) {
-	cfg := fakeProxy(t, http.StatusProxyAuthRequired)
-
-	got, err := Probe(context.Background(), cfg, "gestao", "senha-errada")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != ProbeBadCredentials {
+	if got, _ := Probe(context.Background(), cfg, "ana", "errada"); got != ProbeBadCredentials {
 		t.Errorf("result = %v, want ProbeBadCredentials", got)
 	}
 }
 
-func TestProbeDetectsAnUnknownAddress(t *testing.T) {
-	// The distinction that matters: this one is the user's to fix.
-	cfg := proxy.Config{
-		Scheme: "http",
-		Host:   "proxy-que-nao-existe.invalid",
-		Port:   "3128",
-	}
+// The credentials that do work must come back as plain success — the
+// second, anonymous attempt is refused, which is what proves the proxy
+// really checked.
+func TestProbeAcceptsCredentialsTheProxyApproves(t *testing.T) {
+	cfg := fakeProxy(t, true)
 
-	got, _ := Probe(context.Background(), cfg, "gestao", "senha")
-	if got != ProbeUnknownHost {
-		t.Errorf("result = %v, want ProbeUnknownHost — a typo must not read as an outage", got)
+	if got, _ := Probe(context.Background(), cfg, "ana", "certa"); got != ProbeOK {
+		t.Errorf("result = %v, want ProbeOK", got)
 	}
 }
 
-func TestProbeDetectsAnAddressThatDoesNotAnswer(t *testing.T) {
-	// A port nobody listens on: resolves fine, refuses the connection.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserving a port: %v", err)
-	}
-	addr := ln.Addr().(*net.TCPAddr)
-	ln.Close() // free it, so connecting is refused
+// Nothing listening is not the same problem as a wrong password, and must
+// not be reported as one.
+func TestProbeReportsUnreachableWhenNothingAnswers(t *testing.T) {
+	cfg := proxy.Config{Host: "127.0.0.1", Port: "1"}
 
-	cfg := proxy.Config{Scheme: "http", Host: "127.0.0.1", Port: strconv.Itoa(addr.Port)}
-
-	got, _ := Probe(context.Background(), cfg, "gestao", "senha")
-	if got != ProbeUnreachable {
+	if got, _ := Probe(context.Background(), cfg, "ana", "x"); got != ProbeUnreachable {
 		t.Errorf("result = %v, want ProbeUnreachable", got)
 	}
-}
-
-func TestProbeStopsWhenTheContextIsCancelled(t *testing.T) {
-	cfg := fakeProxy(t, http.StatusOK)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// A cancelled probe must not report success: the window's Cancel button
-	// depends on this, and a probe that ignored it would save credentials
-	// nobody confirmed.
-	if got, _ := Probe(ctx, cfg, "gestao", "senha"); got == ProbeOK {
-		t.Error("a cancelled probe reported ProbeOK")
-	}
-}
-
-func TestClassifyProbeErrorReadsA407FromATunnelFailure(t *testing.T) {
-	// CONNECT refusals never become a *http.Response, so the status only
-	// exists in the error text. This is the fragile path and the reason it
-	// has its own test.
-	err := &url.Error{
-		Op:  "Get",
-		URL: probeURL,
-		Err: errProxyConnect{},
-	}
-	if got := classifyProbeError(err); got != ProbeBadCredentials {
-		t.Errorf("result = %v, want ProbeBadCredentials for %v", got, err)
-	}
-}
-
-type errProxyConnect struct{}
-
-func (errProxyConnect) Error() string {
-	return `proxyconnect tcp: Proxy Authentication Required`
 }

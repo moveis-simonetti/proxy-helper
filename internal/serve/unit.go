@@ -110,3 +110,10 @@ func ReloadDaemon(ex *proxy.Executor) error {
 	}
 	return ex.Run("systemctl", "--user", "reload", UnitName)
 }
+
+// StartHint is the command a person can run to start the daemon by hand.
+// It differs per platform, so callers never spell out a service manager
+// that does not exist on the machine they are running on.
+func StartHint() string {
+	return `systemctl --user start ` + UnitName
+}

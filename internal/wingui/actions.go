@@ -128,3 +128,51 @@ func UpstreamTrouble() (problem serve.UpstreamProblem, profile string) {
 	state := serve.ReadUpstreamState()
 	return state.Problem, state.Profile
 }
+
+// ProfileSummary is a profile as the list shows it: what it is called and
+// where it points.
+type ProfileSummary struct {
+	Name    string
+	Address string
+	Active  bool
+}
+
+// ProfileSummaries lists the saved profiles with their addresses.
+//
+// The list shows the address under each name because the name alone does
+// not say what the profile does — two profiles called "Casa" and "Casa 2"
+// are indistinguishable until you can see where each one points.
+func ProfileSummaries() ([]ProfileSummary, error) {
+	pf, err := proxy.LoadProfiles()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []ProfileSummary
+	for name, cfg := range pf.Profiles {
+		if name == proxy.CurrentProfileName {
+			continue
+		}
+		out = append(out, ProfileSummary{
+			Name:    name,
+			Address: ProfileAddress(cfg),
+			Active:  name == pf.ActiveProfile,
+		})
+	}
+	slices.SortFunc(out, func(a, b ProfileSummary) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out, nil
+}
+
+// ProfileAddress renders where a profile points, in the words the person
+// typed it in.
+func ProfileAddress(cfg proxy.Config) string {
+	if cfg.PACURL != "" {
+		return "configuração automática (.pac)"
+	}
+	if cfg.Host == "" {
+		return "sem endereço"
+	}
+	return cfg.Host + ":" + cfg.Port
+}

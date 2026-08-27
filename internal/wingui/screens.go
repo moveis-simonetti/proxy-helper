@@ -79,21 +79,27 @@ func newHairline() fyne.CanvasObject {
 
 // showProfiles lists the saved profiles.
 func (u *mainUI) showProfiles() {
-	names, active, err := Profiles()
+	summaries, err := ProfileSummaries()
 	if err != nil {
 		dialogError(u.win, err)
 		return
 	}
 
 	rows := container.NewVBox()
-	if len(names) == 0 {
+	if len(summaries) == 0 {
 		rows.Add(widget.NewLabel("Nenhum perfil salvo ainda."))
 	}
-	for i, name := range names {
+	for i, p := range summaries {
 		if i > 0 {
 			rows.Add(newHairline())
 		}
-		rows.Add(u.profileRow(name, name == active))
+		// Which profile is in use comes from the window, not from the file
+		// it read: the window knows what it just applied, and the file may
+		// not have caught up — always in a dry run, and briefly in a real
+		// one. Trusting the file made the selection appear to ignore the
+		// click.
+		p.Active = p.Name == u.profile
+		rows.Add(u.profileRow(p))
 	}
 
 	add := widget.NewButtonWithIcon("Adicionar perfil", theme.ContentAddIcon(), func() {
@@ -103,41 +109,63 @@ func (u *mainUI) showProfiles() {
 	u.win.SetContent(container.NewPadded(container.NewVBox(
 		newBackBar("Perfis", u.showStatus),
 		newCard(rows),
-		add,
+		container.NewHBox(add),
 	)))
 }
 
-func (u *mainUI) profileRow(name string, active bool) fyne.CanvasObject {
-	label := canvas.NewText(name, colorForeground)
-	label.TextSize = cardValue
-	if active {
-		label.TextStyle = fyne.TextStyle{Bold: true}
-	}
+// profileRow is one profile as the canvas draws it: a selection circle, the
+// name with its address underneath, and the actions on the right.
+func (u *mainUI) profileRow(p ProfileSummary) fyne.CanvasObject {
+	// The circle is the control that switches profile — clicking the row's
+	// mark is how the design says "use this one".
+	pick := widget.NewButtonWithIcon("", selectionIcon(p.Active), func() {
+		if !p.Active {
+			u.switchProfile(p.Name, u.showProfiles)
+		}
+	})
+	pick.Importance = widget.LowImportance
 
-	edit := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() { u.editProfile(name) })
+	name := canvas.NewText(p.Name, colorForeground)
+	name.TextSize = cardValue
+	name.TextStyle = fyne.TextStyle{Bold: true}
+
+	address := canvas.NewText(p.Address, colorMuted)
+	address.TextSize = rowDetail
+
+	// 2px between the two lines, as drawn; a VBox would use the theme gap.
+	text := container.New(&tightStack{gap: 2}, name, address)
+
+	edit := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() { u.editProfile(p.Name) })
 	edit.Importance = widget.LowImportance
 
-	remove := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() { u.confirmRemoveProfile(name) })
+	remove := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() { u.confirmRemoveProfile(p.Name) })
 	remove.Importance = widget.LowImportance
 
-	var trailing fyne.CanvasObject = widget.NewButton("Usar", func() { u.switchProfile(name, u.showProfiles) })
-	if active {
-		// Green, not the brand colour: "in use" is a healthy state, and the
-		// brand is red.
+	actions := container.NewHBox(edit, remove)
+	if p.Active {
 		mark := canvas.NewText("em uso", colorSuccess)
 		mark.TextSize = cardLabel
 		mark.TextStyle = fyne.TextStyle{Bold: true}
-		trailing = container.NewCenter(mark)
+		actions = container.NewHBox(container.NewCenter(mark), edit, remove)
 	}
 
-	return container.NewBorder(nil, nil, label, container.NewHBox(trailing, edit, remove))
+	return container.NewBorder(nil, nil, container.NewCenter(pick), actions, container.New(&insetLayout{left: 4, top: 6, bottom: 6}, text))
+}
+
+// selectionIcon is the filled check for the profile in use and the empty
+// circle for the others.
+func selectionIcon(active bool) fyne.Resource {
+	if active {
+		return theme.RadioButtonCheckedIcon()
+	}
+	return theme.RadioButtonIcon()
 }
 
 // confirmRemoveProfile asks before deleting.
 //
-// Deleting a profile throws away an address and a username someone had to
-// obtain from somebody else, and there is no undo — so this is one of the
-// few places in the app that stops to ask.
+// Deleting throws away an address and a username someone had to obtain from
+// somebody else, and there is no undo — so this is one of the few places in
+// the app that stops to ask.
 func (u *mainUI) confirmRemoveProfile(name string) {
 	dialog.ShowConfirm(
 		"Remover perfil",
@@ -151,21 +179,20 @@ func (u *mainUI) confirmRemoveProfile(name string) {
 				dialogError(u.win, err)
 				return
 			}
-			if wasActive {
-				// The machine may still be pointing at what was just
-				// deleted; leaving it there would route traffic to a
-				// profile that no longer exists.
-				go func() {
-					_, _ = TurnOff(name)
-					fyne.Do(func() {
-						u.on, u.profile = false, ""
-						u.refreshTray()
-						u.showProfiles()
-					})
-				}()
+			if !wasActive {
+				u.showProfiles()
 				return
 			}
-			u.showProfiles()
+			// The machine may still point at what was just deleted;
+			// leaving it there routes traffic to a profile that is gone.
+			go func() {
+				_, _ = TurnOff(name)
+				fyne.Do(func() {
+					u.on, u.profile = false, ""
+					u.refreshTray()
+					u.showProfiles()
+				})
+			}()
 		},
 		u.win,
 	)

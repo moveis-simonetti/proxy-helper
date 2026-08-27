@@ -2,6 +2,7 @@ package wingui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -36,7 +37,29 @@ const dryRunEnv = "MSPROXY_DRY_RUN"
 
 // executor returns the executor the interface acts through.
 func executor() *proxy.Executor {
-	return &proxy.Executor{DryRun: os.Getenv(dryRunEnv) != ""}
+	return &proxy.Executor{
+		DryRun: os.Getenv(dryRunEnv) != "",
+		Out:    consoleOut(),
+		Stderr: consoleOut(),
+	}
+}
+
+// consoleOut is where a command's output goes.
+//
+// On Windows this is io.Discard, and that is not a style choice. The
+// interface is linked with -H windowsgui, so the process has no console:
+// os.Stdout is an invalid handle and every write to it fails. exec.Command
+// reports that failure as the command's own, which is how "schtasks
+// /Create" came back as "exit status 1" — it was never rejected by Task
+// Scheduler, it just could not write to the pipe we handed it.
+//
+// Elsewhere the output is kept: the interface is run from a terminal during
+// development, where the dry-run preview is the whole point.
+func consoleOut() io.Writer {
+	if isWindows {
+		return io.Discard
+	}
+	return os.Stdout
 }
 
 // DryRun reports whether writes are being previewed rather than made, so the

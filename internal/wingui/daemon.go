@@ -68,6 +68,15 @@ func EnsureDaemon() error {
 		return fmt.Errorf("não foi possível iniciar o serviço do proxy: %w", err)
 	}
 	if !waitForDaemon() {
+		// The bare "did not answer" names the symptom the person just saw.
+		// What they need is why, and the daemon writes that down before it
+		// gives up.
+		if detail := daemonStartupDetail(); detail != "" {
+			return fmt.Errorf("o serviço do proxy não conseguiu iniciar: %s", detail)
+		}
+		if where := daemonLogLocation(); where != "" {
+			return fmt.Errorf("o serviço do proxy foi instalado mas não respondeu, e não registrou o motivo (log em %s)", where)
+		}
 		return fmt.Errorf("o serviço do proxy foi instalado mas não respondeu")
 	}
 	return nil

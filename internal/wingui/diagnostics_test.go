@@ -145,3 +145,28 @@ func TestTheReleasedSitesLineCountsCorrectly(t *testing.T) {
 		}
 	}
 }
+
+// The screen contradicted itself: "o proxy está desligado" in grey, and
+// right under it a red alert about the service that is only installed when
+// the proxy is turned on.
+func TestBackgroundCheckIsNotAProblemWhileTheProxyIsOff(t *testing.T) {
+	in := DiagnosticsInput{HasProfile: true, SystemApplied: false, DaemonRunning: false}
+
+	got := findCheck(t, Diagnostics(in), "Serviço em segundo plano")
+
+	if got.State == CheckBad {
+		t.Errorf("state = %q, want anything but a problem while the proxy is off", got.State)
+	}
+}
+
+// With the proxy on, the same stopped service is the whole reason the
+// machine has no internet, and must read as broken.
+func TestBackgroundCheckIsAProblemWhenTheProxyIsOn(t *testing.T) {
+	in := DiagnosticsInput{HasProfile: true, SystemApplied: true, DaemonRunning: false}
+
+	got := findCheck(t, Diagnostics(in), "Serviço em segundo plano")
+
+	if got.State != CheckBad {
+		t.Errorf("state = %q, want %q", got.State, CheckBad)
+	}
+}

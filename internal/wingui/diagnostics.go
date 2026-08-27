@@ -119,6 +119,17 @@ func systemCheck(in DiagnosticsInput) Check {
 
 func backgroundCheck(in DiagnosticsInput) Check {
 	if !in.DaemonRunning {
+		// Com o proxy desligado o serviço não deveria estar rodando: ele é
+		// instalado ao ligar. Marcar isso como problema punha a tela em
+		// contradição consigo mesma — "o proxy está desligado" logo acima,
+		// em cinza, e um alerta vermelho por baixo dizendo que algo quebrou.
+		if !in.SystemApplied {
+			return Check{
+				Title:  "Serviço em segundo plano",
+				Detail: "não é necessário enquanto o proxy está desligado",
+				State:  CheckNeutral,
+			}
+		}
 		return Check{
 			Title:  "Serviço em segundo plano",
 			Detail: "não está rodando — o proxy não vai funcionar",

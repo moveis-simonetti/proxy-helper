@@ -31,6 +31,9 @@ const (
 	PhaseRefused
 	// PhaseUnreachable: the address resolves but nothing answered.
 	PhaseUnreachable
+	// PhaseUnverified: the proxy worked, but never asked for a password, so
+	// whether the one typed is right remains unknown.
+	PhaseUnverified
 )
 
 // SetupFields is what the person typed.
@@ -75,6 +78,8 @@ func PhaseFor(result serve.ProbeResult) SetupPhase {
 		return PhaseOK
 	case serve.ProbeBadCredentials:
 		return PhaseRefused
+	case serve.ProbeNoAuthRequired:
+		return PhaseUnverified
 	case serve.ProbeUnknownHost:
 		return PhaseUnknownHost
 	default:
@@ -107,6 +112,15 @@ func MessageFor(phase SetupPhase) (Message, bool) {
 		return Message{
 			Title: "Funcionou",
 			Body:  "O proxy respondeu e o acesso foi aceito. Pode salvar.",
+		}, true
+	case PhaseUnverified:
+		// Not marked as a failure: nothing is broken, and the person can
+		// save and use it. But it must not say "funcionou", because the
+		// password was never checked — and someone who reads "funcionou"
+		// over a wrong password stops looking for the real problem.
+		return Message{
+			Title: "Conectou, mas não deu para conferir a senha",
+			Body:  "O proxy aceitou o acesso sem pedir usuário e senha, então não dá para saber se os que você digitou estão certos.",
 		}, true
 	case PhaseUnknownHost:
 		return Message{

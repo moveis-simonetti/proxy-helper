@@ -4,6 +4,7 @@ package wingui
 
 import (
 	_ "embed"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -11,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"proxy-helper/internal/proxy"
@@ -41,7 +43,15 @@ func Run(hidden bool) error {
 	a.SetIcon(iconOff)
 
 	w := a.NewWindow(windowTitle)
-	w.Resize(fyne.NewSize(460, 560))
+	// Sized once, here. Resizing per screen made the window jump around as
+	// the person navigated, and a window that changes shape when you look
+	// at a different part of it reads as broken.
+	w.Resize(fyne.NewSize(460, 620))
+	w.SetFixedSize(false)
+
+	if DryRun() {
+		w.SetTitle(windowTitle + " — demonstração (nada é aplicado de verdade)")
+	}
 
 	ui := &mainUI{app: a, win: w, iconOn: iconOn, iconOff: iconOff}
 	ui.build()
@@ -58,8 +68,34 @@ func Run(hidden bool) error {
 		}
 	}
 
+	ui.watchCredentials()
+
 	w.ShowAndRun()
 	return nil
+}
+
+// credentialCheckInterval is how often the window re-reads what the daemon
+// observed.
+//
+// A minute, not a second: the state changes when a password expires, which
+// happens once every few months, and polling faster would only spend wake-ups
+// to learn nothing.
+const credentialCheckInterval = time.Minute
+
+// watchCredentials keeps the warning current while the window is open.
+//
+// Checking only at startup would miss the case this feature exists for: the
+// password expires during the day, with the app already running.
+func (u *mainUI) watchCredentials() {
+	go func() {
+		for range time.Tick(credentialCheckInterval) {
+			fyne.Do(func() {
+				if u.refreshWarning != nil {
+					u.refreshWarning()
+				}
+			})
+		}
+	}()
 }
 
 type mainUI struct {
@@ -74,18 +110,34 @@ type mainUI struct {
 	// repaintStatus redraws the status screen after the state changes from
 	// the tray, which has no reference to the screen's widgets.
 	repaintStatus func()
+	// refreshWarning re-checks whether the daemon is being refused.
+	refreshWarning func()
 }
 
 // showSetup draws the first-run form. It is reused to add a profile: the
 // fields and the real probe are the same, so a second, nearly identical
 // screen would only be a copy that drifts.
 func (u *mainUI) showSetup(after func()) {
-	screen := newSetupScreen(func(cfg proxy.Config, user, pass string) {
-		if err := SaveFirstProfile(cfg, user, pass); err != nil {
+	u.showSetupFor("", SetupFields{}, after)
+}
+
+// showSetupFor draws the form, optionally pre-filled and saving under a
+// given profile name.
+func (u *mainUI) showSetupFor(profileName string, initial SetupFields, after func()) {
+	screen := newSetupScreen(initial, func(name string, cfg proxy.Config, user, pass string) {
+		// Renaming while editing means the old entry has to go, or the
+		// person ends up with two profiles where they meant to have one.
+		if profileName != "" && name != profileName {
+			if _, err := RemoveProfile(profileName); err != nil {
+				dialogError(u.win, err)
+				return
+			}
+		}
+		if err := SaveProfileNamed(name, cfg, user, pass); err != nil {
 			dialogError(u.win, err)
 			return
 		}
-		u.profile = defaultProfileName
+		u.profile = name
 		if after != nil {
 			after()
 			return
@@ -113,30 +165,40 @@ func (u *mainUI) build() {
 }
 
 func (u *mainUI) showStatus() {
+	seal := container.NewStack()
+
 	state := canvas.NewText("Desligado", colorMuted)
-	state.TextSize = 30
+	state.TextSize = stateSize
 	state.TextStyle = fyne.TextStyle{Bold: true}
 	state.Alignment = fyne.TextAlignCenter
 
-	detail := widget.NewLabel("")
+	detail := canvas.NewText("", colorExplain)
+	detail.TextSize = explainSize
 	detail.Alignment = fyne.TextAlignCenter
-	detail.Wrapping = fyne.TextWrapWord
 
 	toggle := widget.NewButton("", nil)
 
 	paint := func() {
+		seal.RemoveAll()
+		if u.on {
+			seal.Add(newStateSeal(true, u.iconOn))
+		} else {
+			seal.Add(newStateSeal(false, u.iconOff))
+		}
+		seal.Refresh()
+
 		if u.on {
 			state.Text = "Ligado"
 			// Green for the positive state, never the brand colour.
 			state.Color = colorSuccess
-			detail.SetText("Sua internet está passando pelo proxy. Tudo funcionando.")
+			setText(detail, "Sua internet está passando pelo proxy. Tudo funcionando.")
 			toggle.SetText("Desligar o proxy")
 			toggle.Importance = widget.MediumImportance
 			u.setIcon(u.iconOn)
 		} else {
 			state.Text = "Desligado"
 			state.Color = colorMuted
-			detail.SetText("Sua internet está saindo direto, sem passar pelo proxy.")
+			setText(detail, "Sua internet está saindo direto, sem passar pelo proxy.")
 			toggle.SetText("Ligar o proxy")
 			toggle.Importance = widget.HighImportance
 			u.setIcon(u.iconOff)
@@ -147,29 +209,78 @@ func (u *mainUI) showStatus() {
 	toggle.OnTapped = func() { u.toggle(toggle, paint) }
 	u.repaintStatus = paint
 
-	profileRow := container.NewBorder(nil, nil,
-		widget.NewLabel("Perfil"), nil,
-		widget.NewLabel(u.profileLabel()),
-	)
-
-	links := container.NewHBox(
-		widget.NewButton("Perfis", u.showProfiles),
-		widget.NewButton("Diagnóstico", u.showDiagnostics),
-	)
-	for _, o := range links.Objects {
-		if b, ok := o.(*widget.Button); ok {
-			b.Importance = widget.LowImportance
+	profileLabel := canvas.NewText("Perfil", colorMuted)
+	profileLabel.TextSize = cardLabel
+	// Switching is the frequent action, so it happens here rather than
+	// behind a screen. Managing profiles is rare and gets its own link:
+	// one button doing both is what made "Trocar" the only way to reach
+	// editing, which is not what the word says.
+	names, active, _ := Profiles()
+	swap := widget.NewSelect(names, func(chosen string) {
+		if chosen == "" || chosen == u.profile {
+			return
 		}
-	}
+		// Repaint the pieces that changed rather than rebuilding the
+		// screen: SetContent flashes the window, and it rebuilt the picker
+		// from disk, which in a dry run has not changed.
+		u.switchProfile(chosen, func() {
+			if u.repaintStatus != nil {
+				u.repaintStatus()
+			}
+		})
+	})
+	swap.PlaceHolder = "nenhum perfil"
+	swap.SetSelected(active)
 
-	u.win.SetContent(container.NewPadded(container.NewVBox(
-		state, detail,
-		widget.NewSeparator(),
+	profileCard := container.NewBorder(nil, nil, container.NewCenter(profileLabel), nil, swap)
+
+	diagnosticsLink := widget.NewButton("Ver diagnóstico", u.showDiagnostics)
+	diagnosticsLink.Importance = widget.LowImportance
+
+	// The daemon may have been refused since this screen was last drawn.
+	warning := container.NewVBox()
+	u.refreshWarning = func() {
+		warning.RemoveAll()
+		if problem, profile := UpstreamTrouble(); profile == u.profile {
+			if msg, needsPassword, ok := TroubleMessage(problem); ok {
+				warning.Add(newNoticeCard(msg))
+				if needsPassword {
+					warning.Add(widget.NewButton("Digitar a nova senha", func() {
+						u.showSetup(func() { u.showStatus() })
+					}))
+				}
+			}
+		}
+		warning.Refresh()
+	}
+	u.refreshWarning()
+
+	// Layout of the canvas: brand strip, seal, state, explanation, action,
+	// the profile card, and the diagnostics link pinned to the bottom.
+	manageLink := widget.NewButton("Gerenciar perfis", u.showProfiles)
+	manageLink.Importance = widget.LowImportance
+
+	footer := container.NewHBox(manageLink, layout.NewSpacer(), diagnosticsLink)
+
+	body := container.NewVBox(
+		newBrandBar(u.iconOn),
+		warning,
+		vSpace(spaceAboveSeal),
+		container.NewCenter(seal),
+		vSpace(spaceSealToState),
+		container.NewCenter(state),
+		vSpace(spaceStateToText),
+		container.NewCenter(detail),
+		vSpace(spaceAboveAction),
 		toggle,
-		profileRow,
-		widget.NewSeparator(),
-		links,
-	)))
+		vSpace(spaceActionToCard),
+		newCard(profileCard),
+	)
+
+	// The footer sits at the bottom, as designed — but the window is sized
+	// to the content just above, so "at the bottom" does not mean "after a
+	// hole".
+	u.win.SetContent(container.NewPadded(container.NewBorder(nil, footer, nil, nil, body)))
 	paint()
 }
 
@@ -197,6 +308,10 @@ func (u *mainUI) toggle(button *widget.Button, paint func()) {
 				dialogError(u.win, err)
 				return
 			}
+			// u.profile is deliberately kept: turning the proxy off clears
+			// the active profile on disk, and forgetting it here would
+			// leave the person unable to turn it back on without going
+			// through the profile screen again.
 			u.on = want
 			paint()
 			u.refreshTray()

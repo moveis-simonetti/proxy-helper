@@ -11,49 +11,52 @@ import (
 	"proxy-helper/internal/proxy"
 )
 
-// TaskName is the Scheduled Task that runs the daemon at logon.
+// TaskName is what the daemon is called in the Run key and in messages.
 //
-// Task Scheduler rather than a Windows Service on purpose: a service is
-// installed machine-wide and needs administrator rights, while this product
-// deliberately runs entirely as the logged-in user. A logon task needs no
-// elevation and starts the daemon in the right user's session, which is
-// where its credentials and its loopback listener belong.
+// Not a Windows Service: a service is installed machine-wide and needs
+// administrator rights, while this product runs entirely as the logged-in
+// user — which is where its credentials and its loopback listener belong.
 const TaskName = "MS Proxy"
 
 // UnitName is what the daemon is called in messages to the user. The Unix
 // build names a systemd unit; here it is the scheduled task.
 const UnitName = TaskName
 
-// InstallUnit registers the logon task and starts the daemon now, so the
-// first run does not have to wait for a logoff/logon cycle.
+// runKeyPath is where Windows keeps the per-user programs to start at
+// logon. It is a plain HKCU value, so writing it needs no permission beyond
+// the account's own registry — unlike Task Scheduler, which a managed
+// account is often denied outright.
+const runKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
+
+// InstallUnit makes the daemon start at every logon and starts it now.
+//
+// Deliberately not Task Scheduler any more. Creating a task needs a right
+// that domain policy commonly withholds, and the failure — "ERRO: Acesso
+// negado" — is one the person in front of the machine cannot act on. The
+// Run key and a plain process launch need nothing they do not already have.
 func InstallUnit(ex *proxy.Executor, execPath string, port int, dockerBridge bool) error {
 	// dockerBridge has no meaning here: there is no Docker bridge to listen
 	// on, and the daemon stays strictly on loopback.
 	command := fmt.Sprintf(`"%s" proxy serve --port %d`, execPath, port)
-
-	if err := ex.Run("schtasks", "/Create",
-		"/TN", TaskName,
-		"/TR", command,
-		"/SC", "ONLOGON",
-		// Highest privileges are explicitly NOT requested: this must run as
-		// the plain user, or it would write another account's registry.
-		"/RL", "LIMITED",
-		"/F", // replace an existing task instead of failing
-	); err != nil {
-		return fmt.Errorf("creating the %q task: %w", TaskName, err)
+	if err := ex.SetRegistryString(runKeyPath, TaskName, command); err != nil {
+		return fmt.Errorf("registering the proxy to start at logon: %w", err)
 	}
-
-	if err := ex.Run("schtasks", "/Run", "/TN", TaskName); err != nil {
-		return fmt.Errorf("starting the %q task: %w", TaskName, err)
+	if err := ex.StartDetached(execPath, "proxy", "serve", "--port", strconv.Itoa(port)); err != nil {
+		return err
 	}
 	return nil
 }
 
-// UninstallUnit stops the daemon and removes the task. A task that is not
-// there is not an error: uninstalling twice should succeed.
+// UninstallUnit stops the daemon and unregisters it. Anything already gone
+// is not an error: uninstalling twice should succeed.
 func UninstallUnit(ex *proxy.Executor) error {
+	_ = ex.DeleteRegistryValue(runKeyPath, TaskName)
+	// Leftover from when this was a Scheduled Task: an install that
+	// succeeded under the old scheme would otherwise keep starting a second
+	// daemon at every logon, fighting for the port with this one.
 	_ = ex.Run("schtasks", "/End", "/TN", TaskName)
 	_ = ex.Run("schtasks", "/Delete", "/TN", TaskName, "/F")
+	_ = ex.Run("taskkill", "/IM", "proxy-helper.exe", "/F")
 	return nil
 }
 
@@ -84,9 +87,16 @@ func ReloadDaemon(ex *proxy.Executor) error {
 	return TriggerReload()
 }
 
-// UnitPath reports where the task is described. Windows keeps Scheduled
-// Tasks in its own store rather than in a file the user edits, so this
-// returns the task name for display instead of a path.
+// UnitPath reports where the daemon's autostart is described. There is no
+// file to point at on Windows, so this names the registry value.
 func UnitPath() (string, error) {
-	return `Task Scheduler\` + TaskName, nil
+	return `HKCU\` + runKeyPath + `\` + TaskName, nil
+}
+
+// StartHint is the command a person can run to start the daemon by hand.
+// The Unix build names systemctl here; on Windows the daemon is a plain
+// program, and printing a systemctl command was telling people to run
+// something their machine does not have.
+func StartHint() string {
+	return `proxy-helper.exe proxy serve`
 }

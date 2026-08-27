@@ -106,7 +106,7 @@ func MessageFor(phase SetupPhase) (Message, bool) {
 	case PhaseOK:
 		return Message{
 			Title: "Funcionou",
-			Body:  "O proxy respondeu e o acesso foi aceito. Abrindo o MS Proxy…",
+			Body:  "O proxy respondeu e o acesso foi aceito. Pode salvar.",
 		}, true
 	case PhaseUnknownHost:
 		return Message{
@@ -165,9 +165,9 @@ func ButtonLabel(phase SetupPhase) string {
 	case PhaseTesting:
 		return "Testando o acesso…"
 	case PhaseOK:
-		return "Tudo certo"
+		return "Funcionou"
 	default:
-		return "Testar e continuar"
+		return "Testar"
 	}
 }
 

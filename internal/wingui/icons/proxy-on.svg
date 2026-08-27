@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#bebebe" fill-rule="evenodd" d="
+    M8 1.2 L13.6 3.4 L13.6 8.2 C13.6 11.4 11.2 13.4 8 14.8
+    C4.8 13.4 2.4 11.4 2.4 8.2 L2.4 3.4 Z
+    M3.9 6.6 L8.0 6.6 L8.0 4.3 L12.3 8.0 L8.0 11.7 L8.0 9.4 L3.9 9.4 Z
+  "/>
+</svg>

@@ -38,12 +38,27 @@ CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
 
 ls -la "$OUT"
 
+# O compilador do Inno Setup só existe para Windows, então aqui ele roda sob
+# wine, num prefixo próprio para não mexer no ~/.wine de quem builda.
+# scripts/install-innosetup.sh cria esse prefixo.
+WINE_ISCC="${WINEPREFIX:-$HOME/.cache/proxy-helper-wine}/drive_c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+
 if command -v iscc >/dev/null; then
   echo ">>> instalador"
-  MSPROXY_VERSION="$VERSION" iscc /O"$PWD/dist" "packaging/windows/msproxy.iss" \
-    /DSourceDir="$PWD/$OUT"
+  MSPROXY_VERSION="$VERSION" iscc /O"$PWD/dist" \
+    /DSourceDir="$PWD/$OUT" "packaging/windows/msproxy.iss"
+elif [ -f "$WINE_ISCC" ] && command -v wine >/dev/null; then
+  echo ">>> instalador (via wine)"
+  # O ISCC roda dentro do wine, então os caminhos que ele recebe têm de ser
+  # caminhos do wine: "/" é o drive Z:, e as barras são invertidas.
+  win_path() { printf 'Z:%s' "$(printf '%s' "$1" | tr '/' '\\')"; }
+  WINEPREFIX="${WINEPREFIX:-$HOME/.cache/proxy-helper-wine}" WINEDEBUG=-all \
+    MSPROXY_VERSION="$VERSION" wine "$WINE_ISCC" \
+      "/O$(win_path "$PWD/dist")" \
+      "/DSourceDir=$(win_path "$PWD/$OUT")" \
+      "$(win_path "$PWD/packaging/windows/msproxy.iss")"
 else
-  echo ">>> Inno Setup (iscc) não encontrado; só os binários foram gerados."
-  echo "    Para o instalador: rode packaging/windows/msproxy.iss no Windows,"
-  echo "    ou instale o innosetup via wine."
+  echo ">>> Inno Setup não encontrado; só os binários foram gerados."
+  echo "    Para o instalador: rode scripts/install-innosetup.sh (usa wine),"
+  echo "    ou compile packaging/windows/msproxy.iss num Windows."
 fi

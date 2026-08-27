@@ -22,11 +22,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName",      "Simonetti"
       VALUE "FileDescription",  "MS Proxy"
-      VALUE "FileVersion",      "0.1.0"
+      VALUE "FileVersion",      "v0.3.0-81-g7ac5c22-dirty"
       VALUE "InternalName",     "MSProxy"
       VALUE "OriginalFilename", "MSProxy.exe"
       VALUE "ProductName",      "MS Proxy"
-      VALUE "ProductVersion",   "0.1.0"
+      VALUE "ProductVersion",   "v0.3.0-81-g7ac5c22-dirty"
     END
   END
   BLOCK "VarFileInfo"

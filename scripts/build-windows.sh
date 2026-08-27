@@ -18,6 +18,16 @@ fi
 
 mkdir -p "$OUT"
 
+# O icone e os dados de versao entram no .exe por um .syso, que o Go linka
+# sozinho por estar no diretorio do pacote main. Regenerar a cada build
+# mantem a versao do arquivo igual a do release.
+echo ">>> icone e versao"
+go run ./tools/mkicon packaging/icons/proxy-helper.svg packaging/windows/msproxy.ico
+sed -i "s/VALUE \"FileVersion\",      \"[^\"]*\"/VALUE \"FileVersion\",      \"$VERSION\"/" packaging/windows/msproxy.rc
+sed -i "s/VALUE \"ProductVersion\",   \"[^\"]*\"/VALUE \"ProductVersion\",   \"$VERSION\"/" packaging/windows/msproxy.rc
+x86_64-w64-mingw32-windres -I packaging/windows -i packaging/windows/msproxy.rc \
+  -O coff -o cmd/msproxy/resource_windows_amd64.syso
+
 echo ">>> proxy-helper.exe (CLI e daemon, sem cgo)"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
   go build -ldflags "-s -w -X main.version=$VERSION" -o "$OUT/proxy-helper.exe" .

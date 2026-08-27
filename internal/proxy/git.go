@@ -12,6 +12,8 @@ func NewGitTarget() Target { return &gitTarget{} }
 func (t *gitTarget) Name() string       { return "git" }
 func (t *gitTarget) RequiresRoot() bool { return false }
 
+func (t *gitTarget) SessionScoped() bool { return false }
+
 func (t *gitTarget) Available() bool { return commandExists("git") }
 
 func (t *gitTarget) Set(ex *Executor, cfg Config) error {
@@ -47,7 +49,7 @@ func unsetGitConfig(ex *Executor, key string) error {
 	return nil
 }
 
-func (t *gitTarget) Status(elevate bool) (Status, error) {
+func (t *gitTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "git not installed"

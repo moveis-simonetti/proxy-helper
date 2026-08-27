@@ -1,2 +1,6 @@
 /proxy-helper
 .claude/settings.local.json
+
+# Air (live reload da GUI)
+tmp/
+/dist/

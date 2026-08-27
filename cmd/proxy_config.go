@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
 
 	"github.com/spf13/cobra"
@@ -37,15 +38,11 @@ var proxyConfigSetCmd = &cobra.Command{
 			return fmt.Errorf("nothing to set (see --no-proxy)")
 		}
 
-		pf, err := proxy.LoadProfiles()
+		effective, err := app.SetGlobalNoProxy(deps(), &proxy.Executor{}, configSetNoProxy)
 		if err != nil {
 			return err
 		}
-		pf.GlobalNoProxy = configSetNoProxy
-		if err := pf.Save(); err != nil {
-			return err
-		}
-		fmt.Printf("no-proxy: %s\n", strings.Join(pf.EffectiveGlobalNoProxy(), ","))
+		fmt.Printf("no-proxy: %s\n", strings.Join(effective, ","))
 		return nil
 	},
 }
@@ -54,15 +51,14 @@ var proxyConfigResetNoProxyCmd = &cobra.Command{
 	Use:   "reset-no-proxy",
 	Short: "Reset the global no-proxy list to its default",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pf, err := proxy.LoadProfiles()
+		// nil, not an empty slice: EffectiveGlobalNoProxy falls back to the
+		// default only on nil, and an empty slice would mean "no host
+		// bypasses the proxy" instead.
+		effective, err := app.SetGlobalNoProxy(deps(), &proxy.Executor{}, nil)
 		if err != nil {
 			return err
 		}
-		pf.GlobalNoProxy = nil
-		if err := pf.Save(); err != nil {
-			return err
-		}
-		fmt.Printf("no-proxy: %s\n", strings.Join(pf.EffectiveGlobalNoProxy(), ","))
+		fmt.Printf("no-proxy: %s\n", strings.Join(effective, ","))
 		return nil
 	},
 }

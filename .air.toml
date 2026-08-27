@@ -1,0 +1,39 @@
+# Air — live reload para a janela GTK3 durante o desenvolvimento.
+#
+#   go install github.com/air-verse/air@latest
+#   air
+#
+# É hot RESTART, não hot reload: Go é compilado e os widgets GTK são criados em
+# código, então não há o que trocar em tempo de execução. A janela fecha e
+# reabre a cada mudança. O rebuild incremental leva cerca de 1s.
+#
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # CGO e a tag gui são obrigatórios: sem eles o binário não tem a interface.
+  cmd = "CGO_ENABLED=1 go build -tags gui -o ./tmp/proxy-helper-gui ."
+  bin = "tmp/proxy-helper-gui"
+  entrypoint = ["./tmp/proxy-helper-gui", "gui"]
+
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "docs", ".superpowers", ".git", "scripts"]
+  # Testes não mudam a janela; recompilar a cada _test.go só atrapalha.
+  exclude_regex = ["_test\\.go"]
+
+  # A janela precisa terminar antes da próxima subir, ou ficam duas abertas.
+  # SIGINT dá ao processo a chance de fechar sozinho; o delay cobre o
+  # encerramento do main loop do GTK.
+  send_interrupt = true
+  kill_delay = 500
+
+  # Erro de compilação não derruba o watcher: ele mostra o erro e espera a
+  # próxima edição.
+  stop_on_error = false
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true

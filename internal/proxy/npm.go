@@ -15,7 +15,9 @@ func NewNpmTarget() Target { return &npmTarget{} }
 
 func (t *npmTarget) Name() string       { return "npm" }
 func (t *npmTarget) RequiresRoot() bool { return false }
-func (t *npmTarget) Available() bool    { return true }
+
+func (t *npmTarget) SessionScoped() bool { return false }
+func (t *npmTarget) Available() bool     { return true }
 
 func (t *npmTarget) path() (string, error) {
 	home, err := os.UserHomeDir()
@@ -74,7 +76,7 @@ func (t *npmTarget) Unset(ex *Executor) error {
 	return ex.WriteFile(path, []byte(strings.Join(filtered, "\n")+"\n"), 0o644)
 }
 
-func (t *npmTarget) Status(elevate bool) (Status, error) {
+func (t *npmTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: true}
 	path, err := t.path()
 	if err != nil {

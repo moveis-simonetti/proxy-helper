@@ -13,10 +13,17 @@ func NewAptTarget() Target { return &aptTarget{} }
 func (t *aptTarget) Name() string       { return "apt" }
 func (t *aptTarget) RequiresRoot() bool { return true }
 
+func (t *aptTarget) SessionScoped() bool { return false }
+
 const aptProxyPath = "/etc/apt/apt.conf.d/95proxies"
 
+// aptConfDir is a seam for tests: Available() consults it instead of the
+// literal "/etc/apt" so the unavailable path can be exercised even on
+// Debian/Ubuntu hosts (and CI images) where /etc/apt always exists.
+var aptConfDir = "/etc/apt"
+
 func (t *aptTarget) Available() bool {
-	_, err := os.Stat("/etc/apt")
+	_, err := os.Stat(aptConfDir)
 	return err == nil
 }
 
@@ -41,9 +48,14 @@ func (t *aptTarget) Unset(ex *Executor) error {
 	return ex.RemovePrivilegedFile(aptProxyPath)
 }
 
-func (t *aptTarget) Status(elevate bool) (Status, error) {
+func (t *aptTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
-	content, err := readFileMaybePrivileged(aptProxyPath, elevate)
+	if !st.Available {
+		st.Detail = "apt not installed"
+		return st, nil
+	}
+
+	content, err := ex.ReadFileMaybePrivileged(aptProxyPath, elevate)
 	if os.IsNotExist(err) {
 		st.Detail = "not set"
 		return st, nil

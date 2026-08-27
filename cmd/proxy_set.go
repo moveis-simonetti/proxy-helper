@@ -9,15 +9,17 @@ import (
 )
 
 var (
-	setScheme  string
-	setHost    string
-	setPort    string
-	setUser    string
-	setPass    string
-	setNoProxy []string
-	setProfile string
-	setTargets []string
-	setDryRun  bool
+	setScheme        string
+	setHost          string
+	setPort          string
+	setUser          string
+	setPass          string
+	setNoProxy       []string
+	setProfile       string
+	setTargets       []string
+	setDryRun        bool
+	setViaLocal      bool
+	setRestartDocker bool
 )
 
 var proxySetCmd = &cobra.Command{
@@ -36,7 +38,7 @@ var proxySetCmd = &cobra.Command{
 			if !ok {
 				return fmt.Errorf("profile %q not found (see \"proxy profile list\")", setProfile)
 			}
-			return applyConfig(cfg, setTargets, setDryRun)
+			return applyConfig(setProfile, cfg, setTargets, setDryRun, setViaLocal, setRestartDocker)
 		}
 
 		if setHost == "" {
@@ -51,7 +53,7 @@ var proxySetCmd = &cobra.Command{
 			Password: setPass,
 			NoProxy:  setNoProxy,
 		}
-		return applyConfig(cfg, setTargets, setDryRun)
+		return applyConfig("", cfg, setTargets, setDryRun, setViaLocal, setRestartDocker)
 	},
 }
 
@@ -65,5 +67,7 @@ func init() {
 	proxySetCmd.Flags().StringVar(&setProfile, "profile", "", "apply a saved profile instead of --host/--port/etc (see \"proxy profile\")")
 	proxySetCmd.Flags().StringSliceVar(&setTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxySetCmd.Flags().BoolVar(&setDryRun, "dry-run", false, "print what would change without applying it")
+	proxySetCmd.Flags().BoolVar(&setViaLocal, "via-local", false, "point targets at the local proxy (see \"proxy serve\") instead of writing the upstream and its credentials into every tool's config")
+	proxySetCmd.Flags().BoolVar(&setRestartDocker, "restart-docker", false, "restart the Docker daemon after applying, so the change takes effect (this restarts running containers)")
 	proxyCmd.AddCommand(proxySetCmd)
 }

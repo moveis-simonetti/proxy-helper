@@ -136,10 +136,14 @@ proxy-helper proxy profile list
 # Habilitar um perfil: aplica aos targets e marca como ativo
 # (só um perfil fica ativo por vez)
 proxy-helper proxy profile enable trabalho
+# Com o encanamento do "proxy serve" montado (--via-local), esse mesmo
+# comando não toca em target nenhum: só troca o perfil ativo e recarrega
+# o daemon. Veja "Proxy local" abaixo.
 
 # Desabilitar: limpa o proxy dos targets e desmarca como ativo
 proxy-helper proxy profile disable trabalho
-# (o nome é opcional — "proxy profile disable" desabilita o que estiver ativo)
+# (o nome é opcional — "proxy profile disable" desabilita o que estiver ativo;
+#  ele lembra qual era, então "proxy on" depois restaura esse perfil)
 
 # Editar campos de um perfil existente (só os flags passados são alterados)
 proxy-helper proxy profile edit trabalho --port 3128
@@ -158,6 +162,213 @@ como ativo, use `--profile` no `proxy set` (mutuamente exclusivo com
 ```
 proxy-helper proxy set --profile vpn-casa --targets git,npm
 ```
+
+## Proxy local (`proxy serve`)
+
+Em vez de escrever o proxy real (host, porta, usuário e senha) em cada um
+dos targets, dá pra rodar um proxy local em `127.0.0.1:8888` que encadeia
+no proxy real. Os targets passam a apontar para essa URL fixa e sem
+credencial; quem sabe o proxy verdadeiro é só o daemon, lendo o
+`config.json`.
+
+Isso separa duas coisas que hoje ficam misturadas:
+
+- **O encanamento** — instalar o daemon e apontar os targets pra ele. Feito
+  uma vez por máquina, exige sudo (a maioria dos targets exige).
+- **O estado do proxy** — qual perfil está ativo, ou se está desligado.
+  Muda todo dia, é instantâneo e nunca precisa de sudo, porque não toca em
+  target nenhum: só grava o `config.json` e manda o daemon recarregar.
+
+| Ação | Comando | Frequência | Precisa de sudo |
+|---|---|---|---|
+| Instalar o serviço | `proxy serve install` | uma vez | não |
+| Apontar os targets para ele | `proxy set --host … --via-local` | uma vez | sim |
+| Desligar o proxy | `proxy off` | diário | não |
+| Religar | `proxy on` | diário | não |
+| Trocar de proxy | `proxy profile enable <nome>` | diário | não |
+| Desfazer o encanamento | `proxy unset` | raro | sim |
+
+Com o encanamento montado, `proxy profile enable <nome>` deixa de
+reconfigurar os targets: ele só grava `active_profile` no `config.json` e
+manda o daemon recarregar. Isso é o que torna a troca diária instantânea e
+sem sudo — e é o que garante que a credencial do perfil **nunca** seja
+escrita no `~/.gitconfig`, no `~/.npmrc`, no `apt.conf.d` ou em qualquer
+outro target. Sem o encanamento (quem não usa o daemon), o comportamento
+antigo continua valendo: `profile enable` aplica a config real aos targets.
+
+A regra que separa os dois eixos: **`unset` desfaz o encanamento** (volta
+os targets a não apontar mais pro daemon); **`off` só manda o daemon rotear
+tudo direto**, sem tocar em target algum. Um daemon com perfil vazio é
+inofensivo — é só um proxy que faz `DIRECT` pra tudo.
+
+```
+# Uma vez por máquina
+proxy-helper proxy serve install
+proxy-helper proxy set --profile trabalho --via-local
+
+# No dia a dia, sem sudo
+proxy-helper proxy off                     # tudo direto
+proxy-helper proxy on                      # volta pro último perfil
+proxy-helper proxy on vpn-casa             # ou troca pra outro perfil
+proxy-helper proxy profile enable trabalho # idem, via profile
+
+# Raro: tirar o encanamento por completo
+proxy-helper proxy unset --targets ...
+```
+
+`proxy set --via-local` (e `proxy profile enable --via-local`) recusam
+rodar se o daemon não estiver instalado e ativo, e dizem exatamente o que
+rodar (`proxy serve install`). `proxy serve uninstall` remove o serviço.
+
+A porta padrão é 8888. Para usar outra, passe `--port` no
+`proxy serve install`: ela fica gravada em `local_port` no `config.json`, e
+tanto `--via-local` quanto o `proxy status` passam a usar essa porta.
+`proxy unset` (de todos os targets) desfaz o encanamento; um `unset`
+parcial, de alguns targets só, mantém o aviso — os outros ainda apontam
+pro loopback.
+
+### Credenciais
+
+Com o serviço rodando via `systemd --user`, a forma recomendada de guardar
+a senha é `password_file`, porque **a unit não herda o ambiente do shell
+interativo** — uma `PROXY_HELPER_PASSWORD` exportada no `.bashrc` não chega
+até o daemon.
+
+```bash
+printf '%s' 'minha-senha' > ~/.config/proxy-helper/senha
+chmod 600 ~/.config/proxy-helper/senha
+```
+
+E no perfil, o campo `"password_file"` apontando pro arquivo:
+
+```json
+{
+  "profiles": {
+    "trabalho": {
+      "scheme": "http",
+      "host": "10.0.0.5",
+      "port": "8080",
+      "user": "vinicius",
+      "password_file": "/home/voce/.config/proxy-helper/senha"
+    }
+  }
+}
+```
+
+A ordem de precedência, a primeira que resolver vence:
+
+1. `password_file` — arquivo com só a senha; o daemon recusa ler se a
+   permissão permitir grupo ou outros (exige `0600`/`0400`).
+2. `password_env` — nome de uma variável de ambiente a consultar.
+3. `PROXY_HELPER_PASSWORD` — variável global padrão.
+4. `pass` — o campo legado direto no `config.json`. Continua funcionando,
+   mas é depreciado.
+
+### Navegadores
+
+Com os targets apontando pro daemon local, o pop-up de autenticação do
+Chrome/Firefox some: o navegador fala com o loopback, que não pede
+credencial, e é o daemon quem injeta o `Proxy-Authorization` no hop
+seguinte, contra o proxy real.
+
+### SOCKS5 em apt, npm e docker
+
+`apt`, `npm` e `docker` não falam SOCKS5. Com um perfil `--scheme socks5`
+por trás do daemon, esses targets passam a conseguir usar esse upstream
+mesmo assim — eles falam HTTP com o loopback, e é o daemon quem faz a
+conversão pro SOCKS5 real.
+
+### `proxy logs`
+
+Lê o log do serviço a partir do `journald` e renderiza:
+
+```
+proxy-helper proxy logs                  # últimas 200 entradas
+proxy-helper proxy logs -f               # segue ao vivo, linha a linha
+proxy-helper proxy logs --since 10m
+proxy-helper proxy logs -n 500
+proxy-helper proxy logs --host github.com
+proxy-helper proxy logs --errors         # só requisições que falharam
+proxy-helper proxy logs --direct         # só o que saiu sem passar pelo proxy
+proxy-helper proxy logs --json           # JSON cru do journal, para jq
+proxy-helper proxy logs --stats          # resumo agregado
+```
+
+Saída renderizada:
+
+```
+14:22:01  CONNECT  200  142ms  1.2 MB  github.com:443       -> proxy.corp:8080
+14:22:03  GET      200   38ms  4.1 kB  registry.npmjs.org   -> proxy.corp:8080
+14:22:04  GET      200    2ms   890 B  gitlab.interno       -> DIRECT
+14:22:09  CONNECT  502  310ms      —   api.stripe.com:443   x upstream refused: 407
+```
+
+E `--stats`:
+
+```
+requests: 1000  (proxied 940, direct 60)
+errors:   12 (1.2%)
+traffic:  184.3 MB
+
+top hosts by requests:
+  github.com             210  92.1 MB
+  registry.npmjs.org     180  40.4 MB
+  ...
+```
+
+`-f`/`--follow` imprime cada entrada assim que ela chega, linha a linha,
+até você interromper com Ctrl-C. Como o resumo agregado só faz sentido
+sobre um lote fechado, `--stats` e `--follow` são mutuamente exclusivos.
+
+Eventos de ciclo de vida do daemon (`startup`, `reload`, `reload_failed`)
+não aparecem na tabela — ela é só de requisições. Eles continuam no
+`--json`, que devolve o journal cru.
+
+### Docker e containers
+
+Containers **não alcançam o `127.0.0.1` do host** — lá dentro, `127.0.0.1` é o
+próprio container. Isso torna o `--via-local` parcialmente quebrado para
+Docker, e de um jeito confuso: `docker pull` funciona (o `dockerd` roda no
+host), mas todo `RUN` do build que precise de rede morre com
+`Failed to connect to 127.0.0.1 port 8888`.
+
+A saída é `--docker-bridge`, que faz o daemon escutar **também** no gateway da
+bridge do Docker:
+
+```bash
+proxy-helper proxy serve install --docker-bridge
+proxy-helper proxy set --profile trabalho --via-local
+sudo systemctl restart docker
+```
+
+Os targets `dockerd` e `docker-config` passam a receber o endereço da bridge
+(algo como `172.17.0.1:8888`); os outros nove continuam no loopback. Confira
+com `proxy status`.
+
+O `systemctl restart docker` é obrigatório: o `dockerd` só lê o proxy no
+arranque, e é o passo que mais se esquece.
+
+> **O custo, em uma frase:** com `--docker-bridge`, **qualquer container da
+> máquina pode usar o proxy** — ele não autentica clientes. Não fica exposto à
+> rede local, só aos containers. Por isso é opt-in, o daemon recusa escutar em
+> qualquer endereço publicamente roteável, e loga um aviso no arranque.
+
+Sem a flag, o `proxy set --via-local` avisa que os builds vão falhar em vez de
+deixar você descobrir no meio de um deploy.
+
+### Modo de falha
+
+Se o serviço parar com o encanamento ativo (`--via-local`), tudo que
+depende do proxy passa a falhar com `connection refused`, porque os
+targets continuam apontando pro loopback e não há mais nada escutando lá.
+`proxy status` avisa isso no topo da saída:
+
+```
+daemon: INACTIVE - targets point at 127.0.0.1:8888 and will fail; run "systemctl --user start proxy-helper.service"
+```
+
+A unit sobe com `Restart=always`, então esse cenário deve ser raro na
+prática — mas a saída do `status` já dá o comando exato pra religar.
 
 ## Importar de um PAC (proxy auto-config)
 

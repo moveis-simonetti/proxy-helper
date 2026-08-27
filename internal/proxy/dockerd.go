@@ -16,6 +16,8 @@ func NewDockerdTarget() Target { return &dockerdTarget{} }
 func (t *dockerdTarget) Name() string       { return "dockerd" }
 func (t *dockerdTarget) RequiresRoot() bool { return true }
 
+func (t *dockerdTarget) SessionScoped() bool { return false }
+
 const dockerdDropInPath = "/etc/systemd/system/docker.service.d/http-proxy.conf"
 
 func (t *dockerdTarget) Available() bool {
@@ -42,7 +44,6 @@ func (t *dockerdTarget) Set(ex *Executor, cfg Config) error {
 	if err := ex.RunPrivileged("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	fmt.Println("  note: run `sudo systemctl restart docker` to apply (not done automatically, it restarts running containers)")
 	return nil
 }
 
@@ -53,13 +54,24 @@ func (t *dockerdTarget) Unset(ex *Executor) error {
 	if err := ex.RunPrivileged("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	fmt.Println("  note: run `sudo systemctl restart docker` to apply")
 	return nil
 }
 
-func (t *dockerdTarget) Status(elevate bool) (Status, error) {
+func (t *dockerdTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
-	content, err := readFileMaybePrivileged(dockerdDropInPath, elevate)
+	if !st.Available {
+		switch {
+		case !commandExists("systemctl"):
+			st.Detail = "systemctl not found"
+		case !commandExists("docker"):
+			st.Detail = "docker not found"
+		default:
+			st.Detail = "docker not available"
+		}
+		return st, nil
+	}
+
+	content, err := ex.ReadFileMaybePrivileged(dockerdDropInPath, elevate)
 	if os.IsNotExist(err) {
 		st.Detail = "not set"
 		return st, nil

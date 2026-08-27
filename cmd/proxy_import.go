@@ -57,22 +57,21 @@ var proxyImportCmd = &cobra.Command{
 		}
 
 		if importSaveProfile != "" {
-			pf, err := proxy.LoadProfiles()
+			err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+				if _, exists := pf.Get(importSaveProfile); exists {
+					return fmt.Errorf("profile %q already exists (use \"proxy profile edit\" to change it)", importSaveProfile)
+				}
+				pf.Profiles[importSaveProfile] = cfg
+				return nil
+			})
 			if err != nil {
-				return err
-			}
-			if _, exists := pf.Get(importSaveProfile); exists {
-				return fmt.Errorf("profile %q already exists (use \"proxy profile edit\" to change it)", importSaveProfile)
-			}
-			pf.Profiles[importSaveProfile] = cfg
-			if err := pf.Save(); err != nil {
 				return err
 			}
 			fmt.Printf("profile %q saved\n", importSaveProfile)
 			return nil
 		}
 
-		return applyConfig(cfg, importTargets, importDryRun)
+		return applyConfig("", cfg, importTargets, importDryRun, false, false)
 	},
 }
 

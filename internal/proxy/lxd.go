@@ -14,7 +14,9 @@ func NewLxdTarget() Target { return &lxdTarget{} }
 
 func (t *lxdTarget) Name() string       { return "lxd" }
 func (t *lxdTarget) RequiresRoot() bool { return false }
-func (t *lxdTarget) Available() bool    { return commandExists("lxc") }
+
+func (t *lxdTarget) SessionScoped() bool { return false }
+func (t *lxdTarget) Available() bool     { return commandExists("lxc") }
 
 func (t *lxdTarget) Set(ex *Executor, cfg Config) error {
 	proxyURL, err := cfg.URL()
@@ -45,7 +47,7 @@ func (t *lxdTarget) Unset(ex *Executor) error {
 	return ex.Run("lxc", "config", "unset", "core.proxy_ignore_hosts")
 }
 
-func (t *lxdTarget) Status(elevate bool) (Status, error) {
+func (t *lxdTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: t.Available()}
 	if !st.Available {
 		st.Detail = "lxc not installed"

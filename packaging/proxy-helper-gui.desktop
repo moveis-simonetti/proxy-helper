@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=proxy-helper
+GenericName=Configuração de proxy
+Comment=Gerencia as configurações de proxy do sistema em um lugar só
+Exec=proxy-helper-gui gui
+Icon=proxy-helper
+Terminal=false
+Categories=Settings;GTK;
+Keywords=proxy;rede;network;pac;
+StartupNotify=true
+StartupWMClass=proxy-helper-gui

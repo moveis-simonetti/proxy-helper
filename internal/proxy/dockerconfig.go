@@ -16,7 +16,9 @@ func NewDockerConfigTarget() Target { return &dockerConfigTarget{} }
 
 func (t *dockerConfigTarget) Name() string       { return "docker-config" }
 func (t *dockerConfigTarget) RequiresRoot() bool { return false }
-func (t *dockerConfigTarget) Available() bool    { return true }
+
+func (t *dockerConfigTarget) SessionScoped() bool { return false }
+func (t *dockerConfigTarget) Available() bool     { return true }
 
 func (t *dockerConfigTarget) path() (string, error) {
 	home, err := os.UserHomeDir()
@@ -96,7 +98,7 @@ func (t *dockerConfigTarget) Unset(ex *Executor) error {
 	return ex.WriteFile(path, append(out, '\n'), 0o644)
 }
 
-func (t *dockerConfigTarget) Status(elevate bool) (Status, error) {
+func (t *dockerConfigTarget) Status(ex *Executor, elevate bool) (Status, error) {
 	st := Status{Name: t.Name(), Available: true}
 	path, err := t.path()
 	if err != nil {

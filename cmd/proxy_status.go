@@ -7,7 +7,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
+	"proxy-helper/internal/serve"
 
 	"github.com/spf13/cobra"
 )
@@ -22,36 +24,40 @@ var proxyStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show current proxy configuration across targets",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		targets, err := proxy.ByNames(statusTargets)
+		pf, err := proxy.LoadProfiles()
+		if err != nil {
+			return err
+		}
+		active := daemonActive()
+		switch {
+		case active && pf.ActiveProfile == "":
+			fmt.Printf("daemon: active, no profile selected (everything goes direct)\n\n")
+		case active:
+			fmt.Printf("daemon: active (profile %q)\n\n", pf.ActiveProfile)
+		case pf.ViaLocal:
+			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run \"systemctl --user start %s\"\n\n",
+				pf.EffectiveLocalPort(), serve.UnitName)
+		default:
+			fmt.Printf("daemon: not in use\n\n")
+		}
+
+		ex := &proxy.Executor{}
+		results, err := app.Collect(deps(), ex, statusTargets, false)
 		if err != nil {
 			return err
 		}
 
-		results := make([]proxy.Status, len(targets))
-		var needsElevation []int
-		for i, t := range targets {
-			st, err := t.Status(false)
-			if err != nil {
-				st = proxy.Status{Name: t.Name(), Detail: fmt.Sprintf("error: %v", err)}
-			}
-			results[i] = st
-			if st.NeedsElevation {
-				needsElevation = append(needsElevation, i)
-			}
-		}
-
-		if len(needsElevation) > 0 && !proxy.IsRoot() && !statusNoSudo {
-			names := make([]string, len(needsElevation))
-			for j, i := range needsElevation {
-				names[j] = targets[i].Name()
+		if app.NeedsElevation(results) && !proxy.IsRoot() && !statusNoSudo {
+			var names []string
+			for _, st := range results {
+				if st.NeedsElevation {
+					names = append(names, st.Name)
+				}
 			}
 			if statusYes || confirmSudo(names) {
-				for _, i := range needsElevation {
-					st, err := targets[i].Status(true)
-					if err != nil {
-						st = proxy.Status{Name: targets[i].Name(), Detail: fmt.Sprintf("error: %v", err)}
-					}
-					results[i] = st
+				results, err = app.Elevate(deps(), ex, results)
+				if err != nil {
+					return err
 				}
 			}
 		}

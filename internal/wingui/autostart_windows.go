@@ -9,11 +9,18 @@ import (
 	"proxy-helper/internal/proxy"
 )
 
-// autostartTaskName is the scheduled task that brings the tray icon back at
-// logon. It is separate from the daemon's task on purpose: the proxy has to
-// keep working whether or not anyone opened a window, so the two have
+// autostartValue is the name of this app's entry in the Run key. It is
+// separate from the daemon's entry on purpose: the proxy has to keep
+// working whether or not anyone opened a window, so the two have
 // independent lifetimes.
-const autostartTaskName = "MS Proxy (bandeja)"
+const autostartValue = "MS Proxy (bandeja)"
+
+// runKeyPath is the per-user list of programs Windows starts at logon.
+//
+// The Run key and not a Scheduled Task: creating a task needs a right that
+// domain policy commonly withholds, and being told "Acesso negado" for
+// wanting an app to open at logon is not something the person can fix.
+const runKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
 
 // InstallAutostart registers this binary to start hidden at logon.
 //
@@ -24,25 +31,22 @@ func InstallAutostart(ex *proxy.Executor) error {
 	if err != nil {
 		return err
 	}
-	command := fmt.Sprintf(`"%s" --hidden`, self)
-
-	return ex.Run("schtasks", "/Create",
-		"/TN", autostartTaskName,
-		"/TR", command,
-		"/SC", "ONLOGON",
-		"/RL", "LIMITED",
-		"/F",
-	)
+	return ex.SetRegistryString(runKeyPath, autostartValue, fmt.Sprintf(`"%s" --hidden`, self))
 }
 
-// RemoveAutostart unregisters it. A task that is not there is not an error.
+// RemoveAutostart unregisters it. An entry that is not there is not an error.
 func RemoveAutostart(ex *proxy.Executor) error {
-	_ = ex.Run("schtasks", "/Delete", "/TN", autostartTaskName, "/F")
+	if err := ex.DeleteRegistryValue(runKeyPath, autostartValue); err != nil {
+		return err
+	}
+	// Left over from when this was a Scheduled Task. Harmless to attempt,
+	// and without it an older install keeps opening a second window.
+	_ = ex.Run("schtasks", "/Delete", "/TN", autostartValue, "/F")
 	return nil
 }
 
-// AutostartEnabled reports whether the task exists.
+// AutostartEnabled reports whether the entry exists.
 func AutostartEnabled() bool {
-	_, err := executor().RunOutput("schtasks", "/Query", "/TN", autostartTaskName)
-	return err == nil
+	_, ok := executor().GetRegistryString(runKeyPath, autostartValue)
+	return ok
 }

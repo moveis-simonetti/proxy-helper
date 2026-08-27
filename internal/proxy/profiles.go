@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // DefaultGlobalNoProxy lists hosts that bypass the proxy regardless of which
@@ -224,10 +223,11 @@ func withProfileFileLock(fn func() error) error {
 		return err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	unlock, err := lockFile(lock)
+	if err != nil {
 		return err
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer unlock()
 
 	return fn()
 }

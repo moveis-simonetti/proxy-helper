@@ -40,6 +40,13 @@ func (s *State) Router() Router { return s.current.Load().router }
 // Describe renders the active profile and upstream for status output.
 func (s *State) Describe() string { return s.current.Load().summary }
 
+// ProfileName is the active profile's name, or "" when none is active.
+//
+// It is recorded alongside a credential rejection so a stale warning from
+// one profile is never shown against another: switching profiles is exactly
+// what someone does to work around a proxy that stopped accepting them.
+func (s *State) ProfileName() string { return s.current.Load().profile }
+
 // Reload re-reads the config and swaps the state. On error the previous
 // state is kept: a SIGHUP with broken JSON must never take the proxy down.
 func (s *State) Reload() error {

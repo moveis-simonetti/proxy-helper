@@ -159,6 +159,10 @@ func (s *Server) dialUpstream(ctx context.Context, up Upstream, target string) (
 		if resp.StatusCode == http.StatusProxyAuthRequired {
 			conn.Close()
 			s.logger.Warn("upstream_auth_failed", slog.String("upstream", up.String()), slog.String("host", target))
+			// Recorded, not just logged: the window is a separate process
+			// and cannot watch the log. Without this the person sees pages
+			// failing and no explanation anywhere.
+			RecordUpstreamProblem(ProblemRejected, s.state.ProfileName())
 			return nil, fmt.Errorf("upstream proxy %s rejected the credentials (407)", up.Addr)
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -191,11 +195,16 @@ func (s *Server) handleForward(w http.ResponseWriter, req *http.Request) {
 
 	if resp.StatusCode == http.StatusProxyAuthRequired {
 		s.logger.Warn("upstream_auth_failed", slog.String("upstream", up.String()), slog.String("host", host))
+		RecordUpstreamProblem(ProblemRejected, s.state.ProfileName())
 		s.writeGatewayError(w, fmt.Sprintf(
 			"upstream proxy %s rejected the credentials (407); check the active profile's username and password source",
 			up.Addr))
 		return
 	}
+
+	// A request that got through means the credentials work again; a
+	// warning that outlives its cause teaches people to ignore warnings.
+	RecordUpstreamOK()
 
 	copyHeader(w.Header(), resp.Header)
 	stripHopByHop(w.Header())
@@ -213,6 +222,11 @@ func (s *Server) fail(w http.ResponseWriter, up Upstream, host, method string, s
 	target := up.Addr
 	if up.Kind == KindDirect {
 		target = host
+	} else {
+		// Only when a proxy was in the path: a direct request that fails is
+		// the site's problem, and blaming the proxy setup for it would send
+		// the person to fix something that is not broken.
+		RecordUpstreamProblem(ProblemUnreachable, s.state.ProfileName())
 	}
 	s.logger.Error("request", RequestEvent{
 		Method: method, Host: host, Decision: up.Kind.String(), Upstream: up.String(),

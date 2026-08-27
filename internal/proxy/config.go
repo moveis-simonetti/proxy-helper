@@ -18,9 +18,16 @@ type Config struct {
 	// PasswordFile and PasswordEnv keep the password out of config.json.
 	// PasswordFile is the recommended form for the systemd user unit, which
 	// does not inherit an interactive shell's environment.
-	PasswordFile string   `json:"password_file,omitempty"`
-	PasswordEnv  string   `json:"password_env,omitempty"`
-	NoProxy      []string `json:"no_proxy,omitempty"`
+	PasswordFile string `json:"password_file,omitempty"`
+	PasswordEnv  string `json:"password_env,omitempty"`
+	// PACURL keeps the address of a proxy auto-config file when the user
+	// configured one. On Linux "proxy import" resolves a PAC into Host/Port
+	// and this stays empty; Windows hands the URL to WinINET as-is
+	// (AutoConfigURL), which is better than resolving it once, because the
+	// PAC can route different hosts to different proxies and can change
+	// without the machine being reconfigured.
+	PACURL  string   `json:"pac_url,omitempty"`
+	NoProxy []string `json:"no_proxy,omitempty"`
 }
 
 // URL renders the proxy as a scheme://[user[:pass]@]host[:port] string.

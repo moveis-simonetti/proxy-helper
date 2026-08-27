@@ -133,6 +133,32 @@ func MessageFor(phase SetupPhase) (Message, bool) {
 	return Message{}, false
 }
 
+// TroubleMessage is what the person sees when the daemon reports a problem,
+// and whether the fix is theirs to make.
+//
+// The two cases have to read differently. An expired password is something
+// only they can fix, and the app should say so plainly — that failure takes
+// everyone's internet down on a day nobody chose, and the only symptom is
+// pages not loading. A proxy that is down is nobody's fault and asking them
+// to re-enter a working password would send them chasing the wrong thing.
+func TroubleMessage(problem serve.UpstreamProblem) (msg Message, needsPassword bool, ok bool) {
+	switch problem {
+	case serve.ProblemRejected:
+		return Message{
+			Title: "Sua senha mudou",
+			Body:  "O proxy parou de aceitar a senha guardada. Isso costuma acontecer quando ela expira ou é trocada.",
+			Bad:   true,
+		}, true, true
+	case serve.ProblemUnreachable:
+		return Message{
+			Title: "O proxy não está respondendo",
+			Body:  "Sua senha continua válida, mas não conseguimos falar com o proxy. Isso costuma passar sozinho.",
+			Bad:   true,
+		}, false, true
+	}
+	return Message{}, false, false
+}
+
 // ButtonLabel is what the action button says in each phase.
 func ButtonLabel(phase SetupPhase) string {
 	switch phase {

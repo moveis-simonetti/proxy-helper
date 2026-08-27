@@ -32,6 +32,7 @@ type setupScreen struct {
 	userIn   *widget.Entry
 	passIn   *widget.Entry
 	action   *widget.Button
+	save     *widget.Button
 	feedback *fyne.Container
 	content  *fyne.Container
 }
@@ -74,8 +75,14 @@ func newSetupScreen(initial SetupFields, onDone func(name string, cfg proxy.Conf
 	s.passIn.SetPlaceHolder("a senha que acompanha esse usuário")
 	s.passIn.OnChanged = func(v string) { s.fields.Password = v; s.setPhase(PhaseIdle) }
 
+	// Two buttons, because they answer different questions: "is this
+	// right?" and "keep it". Merging them meant a person could not check an
+	// address without committing it, and could not keep a profile the probe
+	// happened to fail on — a proxy that is momentarily down is not a
+	// reason to lose what was typed.
 	s.action = widget.NewButton(ButtonLabel(PhaseIdle), s.submit)
-	s.action.Importance = widget.HighImportance
+	s.save = widget.NewButton("Salvar", s.commit)
+	s.save.Importance = widget.HighImportance
 
 	s.feedback = container.NewVBox()
 
@@ -95,7 +102,7 @@ func newSetupScreen(initial SetupFields, onDone func(name string, cfg proxy.Conf
 		title, intro,
 		widget.NewSeparator(),
 		form,
-		container.NewPadded(s.action),
+		container.NewPadded(container.NewGridWithColumns(2, s.action, s.save)),
 		s.feedback,
 		widget.NewSeparator(),
 		footer,
@@ -131,13 +138,31 @@ func (s *setupScreen) submit() {
 		defer cancel()
 		result, _ := serve.Probe(ctx, cfg, fields.Username, fields.Password)
 		phase := PhaseFor(result)
-		fyne.Do(func() {
-			s.setPhase(phase)
-			if phase == PhaseOK && s.onDone != nil {
-				s.onDone(fields.Name, cfg, fields.Username, fields.Password)
-			}
-		})
+		fyne.Do(func() { s.setPhase(phase) })
 	}()
+}
+
+// commit saves without testing.
+//
+// Saving an untested profile is allowed on purpose: the probe can fail for
+// reasons that have nothing to do with what was typed, and refusing to save
+// would throw away an address and a username the person may have had to ask
+// someone for.
+func (s *setupScreen) commit() {
+	fields := s.fields.Trimmed()
+	if !fields.Complete() {
+		s.setPhase(PhaseIncomplete)
+		return
+	}
+	cfg, err := ConfigFromAddress(fields.Address)
+	if err != nil {
+		s.setPhase(PhaseUnknownHost)
+		return
+	}
+	cfg.Username = fields.Username
+	if s.onDone != nil {
+		s.onDone(fields.Name, cfg, fields.Username, fields.Password)
+	}
 }
 
 func (s *setupScreen) setPhase(phase SetupPhase) {
@@ -149,8 +174,10 @@ func (s *setupScreen) setPhase(phase SetupPhase) {
 	s.action.SetText(ButtonLabel(phase))
 	if phase == PhaseTesting {
 		s.action.Disable()
+		s.save.Disable()
 	} else {
 		s.action.Enable()
+		s.save.Enable()
 	}
 
 	s.feedback.RemoveAll()

@@ -211,13 +211,23 @@ func (u *mainUI) confirmRemoveProfile(name string) {
 // the old profile's address.
 func (u *mainUI) switchProfile(name string, after func()) {
 	go func() {
-		_, err := TurnOn(name)
+		var err error
+		if u.on {
+			// Already on: the targets have to be rewritten, or the machine
+			// keeps pointing at the previous profile's address.
+			_, err = TurnOn(name)
+		} else {
+			// Off: record the choice and leave it off. Turning the proxy on
+			// is a separate decision, and making it here would change how
+			// every program on the machine reaches the internet.
+			err = SelectProfile(name)
+		}
 		fyne.Do(func() {
 			if err != nil {
 				dialogError(u.win, err)
 				return
 			}
-			u.profile, u.on = name, true
+			u.profile = name
 			u.refreshTray()
 			if after != nil {
 				after()

@@ -177,3 +177,17 @@ func ProfileAddress(cfg proxy.Config) string {
 	}
 	return cfg.Host + ":" + cfg.Port
 }
+
+// SelectProfile marks a profile as the one to use, without applying it.
+//
+// Choosing which profile to use and turning the proxy on are two different
+// decisions. Switching used to go through TurnOn, so picking a profile
+// while the proxy was off turned it on — an action nobody asked for, and on
+// a machine where that changes how every program reaches the internet.
+func SelectProfile(name string) error {
+	if name == "" {
+		return fmt.Errorf("nenhum perfil informado")
+	}
+	_, err := app.On(deps(), executor(), name)
+	return err
+}

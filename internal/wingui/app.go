@@ -144,7 +144,18 @@ func (u *mainUI) showSetupFor(profileName string, initial SetupFields, after fun
 		}
 		u.showStatus()
 	})
-	u.win.SetContent(container.NewPadded(screen.content))
+	// A back arrow whenever there is somewhere to go back to. On the very
+	// first run there is not — no profile exists, so leaving the form would
+	// leave the app with nothing to show — and the header is omitted.
+	content := screen.content
+	if after != nil {
+		title := "Novo perfil"
+		if profileName != "" {
+			title = "Editar perfil"
+		}
+		content = container.NewVBox(newBackBar(title, after), screen.content)
+	}
+	u.win.SetContent(container.NewPadded(content))
 }
 
 func (u *mainUI) build() {

@@ -46,6 +46,12 @@ func EnsureDaemon() error {
 	if serve.DaemonActive() {
 		return nil
 	}
+	if DryRun() {
+		// Nothing was written, so nothing will answer. Waiting for a daemon
+		// that was never installed would fail every action in the mode that
+		// exists precisely to let someone try the actions.
+		return nil
+	}
 
 	execPath, err := findCLI()
 	if err != nil {

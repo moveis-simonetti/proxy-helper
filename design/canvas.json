@@ -1,0 +1,19 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 460, "h": 668, "title": "Primeira execução", "is_interactive": true },
+    { "file": "Principal.dc.html", "x": 560, "y": 0, "w": 460, "h": 540, "title": "Tela principal", "is_interactive": true },
+    { "file": "Bandeja.dc.html", "x": 1120, "y": 0, "w": 300, "h": 320, "title": "Menu da bandeja", "is_interactive": true },
+    { "file": "Perfis.dc.html", "x": 1520, "y": 0, "w": 460, "h": 480, "title": "Perfis", "is_interactive": true },
+    { "file": "Erros.dc.html", "x": 0, "y": 828, "w": 460, "h": 600, "title": "Estados de erro" },
+    { "file": "Diagnostico.dc.html", "x": 560, "y": 828, "w": 560, "h": 400, "title": "Diagnóstico" }
+  ],
+  "annotations": [
+    { "id": "nota-senha", "x": 0, "y": -190, "w": 460, "text": "A tela que decide o produto. A instalação chega a todos de uma vez, então todo mundo passa por aqui no mesmo dia.\n\nNenhum perfil vem pronto, então a pessoa informa o endereço também. O campo aceita as duas formas — host:porta ou uma URL .pac — porque escolher entre elas não é pergunta que faça sentido para quem usa.\n\nExperimente: preencha os três e clique. Para ver os erros, use \"errada\", \"offline\" ou \"endereco\" como senha." },
+    { "id": "nota-bandeja", "x": 1120, "y": -190, "w": 300, "text": "O modo de uso dominante — a janela quase nunca é aberta. O ícone na barra muda de cor conforme o estado." },
+    { "id": "nota-perfis", "x": 1520, "y": -190, "w": 460, "text": "Existe porque nenhum perfil vem pronto e a pessoa troca entre vários: a primeira execução cria um, e os demais precisam de um lugar para nascer.\n\nAdicionar e editar reusam a tela de primeira execução com um campo Nome a mais — não é uma tela nova." },
+    { "id": "nota-erros", "x": 0, "y": 1480, "w": 460, "text": "Nenhum aviso mostra código de erro ou nome de serviço. Só ficaram ações que resolvem o problema da própria tela — o computador sem configuração não tem botão porque não há nada que o app possa fazer por ele." },
+    { "id": "nota-diagnostico", "x": 560, "y": 1280, "w": 560, "text": "Tela de suporte, alcançada pelo link no rodapé da principal. Lista de estados e nada mais." },
+    { "id": "nota-cor", "x": 1520, "y": 828, "w": 320, "text": "Regra de cor: a marca fluaui é vermelha (#fd5260), então o estado positivo usa verde (#46921e) e nunca a primária. Vermelho fica para erro e para a ação principal." }
+  ],
+  "launch": { "view": "canvas" }
+}

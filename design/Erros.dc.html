@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Poppins', 'Segoe UI', system-ui, sans-serif; background: #FBFBFB; color: #181718; }
+    a { color: #2283EE; } a:hover { color: #1967D2; }
+    button { font-family: inherit; cursor: pointer; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; gap: 22px; width: 460px; padding: 24px 28px 28px 28px; background: #FBFBFB; box-sizing: border-box;">
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: #858585;">Senha expirou</span>
+    <div style="display: flex; flex-direction: column; gap: 14px; padding: 18px; background: #ffffff; border: 1px solid #e7e7e7; border-left: 3px solid #f5851a; border-radius: 8px;">
+      <div style="display: flex; align-items: flex-start; gap: 11px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f5851a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;">
+          <path d="M12 8.4 V13"></path>
+          <path d="M12 16.4 V16.5"></path>
+          <path d="M10.6 4.2 L2.9 18.1 A1.6 1.6 0 0 0 4.3 20.5 H19.7 A1.6 1.6 0 0 0 21.1 18.1 L13.4 4.2 A1.6 1.6 0 0 0 10.6 4.2 Z"></path>
+        </svg>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 14px; font-weight: 600;">Sua senha mudou</span>
+          <span style="font-size: 12.5px; line-height: 1.55; color: #5d5d5d; text-wrap: pretty;">O proxy parou de aceitar a senha guardada. Isso costuma acontecer quando ela expira ou é trocada.</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button style="height: 38px; padding: 0 16px; font-size: 13px; font-weight: 600; color: #ffffff; background: #fd5260; border: none; border-radius: 8px;">Digitar a nova senha</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: #858585;">Proxy fora do ar</span>
+    <div style="display: flex; flex-direction: column; gap: 14px; padding: 18px; background: #ffffff; border: 1px solid #e7e7e7; border-left: 3px solid #f8131c; border-radius: 8px;">
+      <div style="display: flex; align-items: flex-start; gap: 11px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f8131c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;">
+          <path d="M12 7.5 V13"></path>
+          <path d="M12 16.6 V16.7"></path>
+          <path d="M12 3.6 A8.4 8.4 0 1 0 12 20.4 A8.4 8.4 0 0 0 12 3.6 Z"></path>
+        </svg>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 14px; font-weight: 600;">O proxy não respondeu</span>
+          <span style="font-size: 12.5px; line-height: 1.55; color: #5d5d5d; text-wrap: pretty;">Sua senha está certa, mas o proxy não atendeu.</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button style="height: 38px; padding: 0 16px; font-size: 13px; font-weight: 600; color: #ffffff; background: #fd5260; border: none; border-radius: 8px;">Tentar de novo</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: #858585;">Nada configurado</span>
+    <div style="display: flex; flex-direction: column; gap: 14px; padding: 18px; background: #ffffff; border: 1px solid #e7e7e7; border-left: 3px solid #b0b0b0; border-radius: 8px;">
+      <div style="display: flex; align-items: flex-start; gap: 11px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#858585" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;">
+          <path d="M12 3.6 A8.4 8.4 0 1 0 12 20.4 A8.4 8.4 0 0 0 12 3.6 Z"></path>
+          <path d="M9.7 9.6 A2.4 2.4 0 0 1 14.3 10.4 C14.3 12 12 12.5 12 14"></path>
+          <path d="M12 17.2 V17.3"></path>
+        </svg>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 14px; font-weight: 600;">Nenhum proxy configurado</span>
+          <span style="font-size: 12.5px; line-height: 1.55; color: #5d5d5d; text-wrap: pretty;">Este computador ainda não recebeu um endereço de proxy. Peça a configuração a quem instalou o aplicativo.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":460,"height":600}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

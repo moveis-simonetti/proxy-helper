@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Poppins', 'Segoe UI', system-ui, sans-serif; background: #FBFBFB; color: #181718; }
+    a { color: #2283EE; } a:hover { color: #1967D2; }
+    button { font-family: inherit; cursor: pointer; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; width: 560px; height: 400px; background: #FBFBFB; box-sizing: border-box;">
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 20px 28px 0 28px;">
+    <button style="display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; background: transparent; border: none; border-radius: 6px;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#414141" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 6.5 L8.5 12 L14 17.5"></path>
+      </svg>
+    </button>
+    <span style="font-size: 15px; font-weight: 600;">Diagnóstico</span>
+  </div>
+
+  <p style="margin: 0; padding: 10px 28px 0 28px; font-size: 12.5px; line-height: 1.55; color: #858585; text-wrap: pretty;">Para quando alguém precisa saber o que está acontecendo.</p>
+
+  <div style="display: flex; flex-direction: column; gap: 1px; margin: 20px 28px 0 28px; background: #e7e7e7; border: 1px solid #e7e7e7; border-radius: 8px; overflow: hidden;">
+    <sc-for list="{{itens}}" as="it" hint-placeholder-count="5">
+      <div style="display: flex; align-items: center; gap: 12px; padding: 13px 16px; background: #ffffff;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: {{it.cor}}; flex-shrink: 0;"></span>
+        <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
+          <span style="font-size: 13px; font-weight: 500;">{{it.titulo}}</span>
+          <span style="font-size: 11.5px; line-height: 1.45; color: #858585;">{{it.detalhe}}</span>
+        </div>
+        <span style="font-size: 11.5px; font-weight: 600; color: {{it.cor}}; flex-shrink: 0;">{{it.estado}}</span>
+      </div>
+    </sc-for>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":560,"height":400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const verde = '#46921e';
+    const cinza = '#858585';
+    return {
+      itens: [
+        { titulo: 'Conexão com o proxy', detalhe: 'proxy.interno na porta 3128', estado: 'OK', cor: verde },
+        { titulo: 'Sua senha', detalhe: 'Aceita e guardada neste computador', estado: 'OK', cor: verde },
+        { titulo: 'Configuração do Windows', detalhe: 'Navegador e demais programas estão usando o proxy', estado: 'OK', cor: verde },
+        { titulo: 'Serviço em segundo plano', detalhe: 'Inicia junto com o Windows', estado: 'OK', cor: verde },
+        { titulo: 'Sites liberados sem proxy', detalhe: '4 endereços', estado: 'Normal', cor: cinza },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

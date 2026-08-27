@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"time"
 
 	"proxy-helper/internal/proxy"
@@ -36,30 +36,22 @@ var proxyLogsCmd = &cobra.Command{
 		}
 		since := serve.EffectiveSince(logsSince, pf.LogsSince, logsAll)
 
-		journalArgs := []string{"--user", "-u", serve.UnitName, "-o", "json", "--no-pager"}
-		if logsFollow {
-			journalArgs = append(journalArgs, "-f")
-		}
-		if since != "" {
-			journalArgs = append(journalArgs, "--since", since)
-		} else {
-			journalArgs = append(journalArgs, "-n", fmt.Sprint(logsLines))
-		}
-
-		journal := exec.Command("journalctl", journalArgs...)
-		journal.Stderr = os.Stderr
-
-		if logsJSON {
-			journal.Stdout = os.Stdout
-			return journal.Run()
-		}
-
-		out, err := journal.StdoutPipe()
+		// The journal on Unix, the daemon's own file on Windows.
+		out, wait, err := serve.OpenLogStream(serve.LogQuery{
+			Follow: logsFollow,
+			Since:  since,
+			Lines:  logsLines,
+		})
 		if err != nil {
 			return err
 		}
-		if err := journal.Start(); err != nil {
-			return fmt.Errorf("running journalctl: %w", err)
+		defer out.Close()
+
+		if logsJSON {
+			if _, err := io.Copy(os.Stdout, out); err != nil {
+				return err
+			}
+			return wait()
 		}
 
 		opts := serve.FilterOptions{
@@ -81,14 +73,14 @@ var proxyLogsCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			return journal.Wait()
+			return wait()
 		}
 
 		entries, err := serve.ParseEntries(out)
 		if err != nil {
 			return err
 		}
-		if err := journal.Wait(); err != nil {
+		if err := wait(); err != nil {
 			return err
 		}
 

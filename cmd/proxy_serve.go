@@ -35,7 +35,14 @@ var proxyServeCmd = &cobra.Command{
 		"This runs in the foreground; use \"proxy serve install\" to run it as a " +
 		"systemd user service.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger := serve.NewLogger(os.Stdout, serveQuiet)
+		// Stdout on Unix (journald captures it); the daemon's own rotating
+		// file on Windows, which has no journal.
+		sink, closeSink, err := serve.LogSink()
+		if err != nil {
+			return err
+		}
+		defer closeSink()
+		logger := serve.NewLogger(sink, serveQuiet)
 
 		pf, err := proxy.LoadProfiles()
 		if err != nil {
@@ -66,10 +73,13 @@ var proxyServeCmd = &cobra.Command{
 			ReadHeaderTimeout: 20 * time.Second,
 		}
 
-		hup := make(chan os.Signal, 1)
-		signal.Notify(hup, syscall.SIGHUP)
+		// SIGHUP on Unix, a named event on Windows: serve.ReloadRequests
+		// hides the difference. Calling signal.Notify(SIGHUP) directly here
+		// would compile on Windows and never fire.
+		reloads, stopReloads := serve.ReloadRequests()
+		defer stopReloads()
 		go func() {
-			for range hup {
+			for range reloads {
 				// A failed reload keeps the previous state; State logs it.
 				_ = state.Reload()
 			}

@@ -20,6 +20,13 @@ type Config struct {
 	// does not inherit an interactive shell's environment.
 	PasswordFile string `json:"password_file,omitempty"`
 	PasswordEnv  string `json:"password_env,omitempty"`
+	// PasswordProtected holds the password encrypted so that only the
+	// current OS user account can read it back (Windows DPAPI). It is the
+	// form the Windows build writes; on Linux the password keeps living in
+	// a 0600 file, and a config carrying this field cannot be decrypted
+	// there at all — by design, since the ciphertext is bound to a Windows
+	// account.
+	PasswordProtected string `json:"password_protected,omitempty"`
 	// PACURL keeps the address of a proxy auto-config file when the user
 	// configured one. On Linux "proxy import" resolves a PAC into Host/Port
 	// and this stays empty; Windows hands the URL to WinINET as-is

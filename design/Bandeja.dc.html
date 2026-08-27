@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Poppins', 'Segoe UI', system-ui, sans-serif; background: #FBFBFB; color: #181718; }
+    a { color: #2283EE; } a:hover { color: #1967D2; }
+    button { font-family: inherit; cursor: pointer; text-align: left; }
+    .item:hover { background: #f6f6f6; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; gap: 16px; width: 300px; padding: 26px; background: #FBFBFB; box-sizing: border-box;">
+
+  <div style="display: flex; flex-direction: column; width: 246px; padding: 6px; background: #ffffff; border: 1px solid #e7e7e7; border-radius: 8px; box-shadow: 0px 3px 10px 0px rgba(38, 38, 38, 0.20);">
+
+    <div style="display: flex; align-items: center; gap: 9px; padding: 10px 12px 11px 12px;">
+      <span style="width: 8px; height: 8px; border-radius: 50%; background: {{corPonto}}; flex-shrink: 0;"></span>
+      <div style="display: flex; flex-direction: column; gap: 1px;">
+        <span style="font-size: 13px; font-weight: 600; color: {{corEstado}};">{{rotuloEstado}}</span>
+        <span style="font-size: 11px; color: #858585;">{{perfil}}</span>
+      </div>
+    </div>
+
+    <div style="height: 1px; margin: 2px 8px 4px 8px; background: #e7e7e7;"></div>
+
+    <button class="item" onClick="{{alternar}}" style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; font-size: 13px; color: #181718; background: transparent; border: none; border-radius: 6px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#414141" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
+        <path d="M12 4.2 V11"></path>
+        <path d="M17.4 6.6 A7.5 7.5 0 1 1 6.6 6.6"></path>
+      </svg>
+      <span>{{rotuloAcao}}</span>
+    </button>
+
+    <div style="height: 1px; margin: 4px 8px; background: #e7e7e7;"></div>
+
+    <span style="padding: 6px 12px 4px 12px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #b0b0b0;">Perfil</span>
+
+    <sc-for list="{{perfis}}" as="p" hint-placeholder-count="2">
+      <button class="item" onClick="{{p.escolher}}" style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px; font-size: 13px; color: #181718; background: transparent; border: none; border-radius: 6px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#46921e" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; opacity: {{p.opacidade}};">
+          <path d="M20 6.5 L9.6 17 L4.5 12"></path>
+        </svg>
+        <span>{{p.nome}}</span>
+      </button>
+    </sc-for>
+
+    <div style="height: 1px; margin: 4px 8px; background: #e7e7e7;"></div>
+
+    <button class="item" style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px; font-size: 13px; color: #181718; background: transparent; border: none; border-radius: 6px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#414141" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
+        <rect x="3.6" y="4.8" width="16.8" height="12.6" rx="2"></rect>
+        <path d="M8.4 20.4 H15.6"></path>
+      </svg>
+      <span>Mostrar janela</span>
+    </button>
+
+    <button class="item" style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px; font-size: 13px; color: #181718; background: transparent; border: none; border-radius: 6px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#414141" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
+        <path d="M14.4 20.4 H6 A2 2 0 0 1 4 18.4 V5.6 A2 2 0 0 1 6 3.6 H14.4"></path>
+        <path d="M17 8.4 L20.6 12 L17 15.6"></path>
+        <path d="M20.6 12 H9.6"></path>
+      </svg>
+      <span>Sair</span>
+    </button>
+
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":300,"height":320}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { ligado: true, perfilIdx: 0 };
+  }
+
+  renderVals() {
+    const nomes = ['Escritório', 'Casa'];
+    const ligado = this.state.ligado;
+
+    return {
+      ligado,
+      rotuloEstado: ligado ? 'Proxy ligado' : 'Proxy desligado',
+      corEstado: ligado ? '#37701b' : '#6d6d6d',
+      corPonto: ligado ? '#46921e' : '#b0b0b0',
+      rotuloAcao: ligado ? 'Desligar o proxy' : 'Ligar o proxy',
+      perfil: nomes[this.state.perfilIdx],
+      perfis: nomes.map((nome, i) => ({
+        nome,
+        opacidade: i === this.state.perfilIdx ? '1' : '0',
+        escolher: () => this.setState({ perfilIdx: i }),
+      })),
+      alternar: () => this.setState({ ligado: !this.state.ligado }),
+    };
+  }
+}
+</script>
+</body>
+</html>

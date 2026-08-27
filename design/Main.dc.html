@@ -1,0 +1,176 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Poppins', 'Segoe UI', system-ui, sans-serif; background: #FBFBFB; color: #181718; }
+    a { color: #2283EE; } a:hover { color: #1967D2; }
+    input { font-family: inherit; }
+    button { font-family: inherit; cursor: pointer; }
+    @keyframes girar { to { transform: rotate(360deg); } }
+    .girando { animation: girar 900ms linear infinite; transform-origin: 50% 50%; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; width: 460px; height: 668px; background: #FBFBFB; box-sizing: border-box;">
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 18px 28px 0 28px;">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fd5260" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3 L20 6.2 V12 C20 16.6 16.5 20 12 21.2 C7.5 20 4 16.6 4 12 V6.2 Z"></path>
+      <path d="M8.8 12 H14.6"></path>
+      <path d="M12.5 9.9 L15.2 12 L12.5 14.1"></path>
+    </svg>
+    <span style="font-size: 13px; font-weight: 500; color: #858585; letter-spacing: 0.01em;">MS Proxy</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px; padding: 26px 28px 0 28px;">
+    <h1 style="margin: 0; font-size: 24px; font-weight: 600; line-height: 1.25; text-wrap: pretty;">Configurar o MS Proxy</h1>
+    <p style="margin: 0; font-size: 13.5px; line-height: 1.55; color: #5d5d5d; text-wrap: pretty;">Informe o endereço do proxy e seu acesso. É só desta vez — depois fica tudo guardado.</p>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 14px; padding: 22px 28px 0 28px;">
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <label style="font-size: 12px; font-weight: 500; color: #414141;">Endereço do proxy</label>
+      <input type="text" value="{{endereco}}" onInput="{{aoDigitarEndereco}}" placeholder="proxy.interno:3128 ou o endereço de um arquivo .pac" style="height: 44px; padding: 0 12px; font-size: 13.5px; color: #181718; background: #f9f9fa; border: 1px solid {{corBordaEndereco}}; border-radius: 8px; outline: none; box-sizing: border-box;">
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <label style="font-size: 12px; font-weight: 500; color: #414141;">Usuário do proxy</label>
+      <input type="text" value="{{usuario}}" onInput="{{aoDigitarUsuario}}" placeholder="usuário de acesso ao proxy" style="height: 44px; padding: 0 12px; font-size: 13.5px; color: #181718; background: #f9f9fa; border: 1px solid {{corBordaUsuario}}; border-radius: 8px; outline: none; box-sizing: border-box;">
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <label style="font-size: 12px; font-weight: 500; color: #414141;">Senha</label>
+      <input type="password" value="{{senha}}" onInput="{{aoDigitar}}" placeholder="a senha que acompanha esse usuário" style="height: 44px; padding: 0 12px; font-size: 13.5px; color: #181718; background: #f9f9fa; border: 1px solid {{corBorda}}; border-radius: 8px; outline: none; box-sizing: border-box;">
+    </div>
+
+    <button onClick="{{testar}}" disabled="{{ocupado}}" style="display: flex; align-items: center; justify-content: center; gap: 9px; height: 46px; margin-top: 2px; font-size: 14px; font-weight: 600; color: #ffffff; background: {{corBotao}}; border: none; border-radius: 8px;">
+      <sc-if value="{{testando}}" hint-placeholder-val="{{ false }}">
+        <svg class="girando" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round">
+          <path d="M12 3.5 A8.5 8.5 0 1 1 5.6 6.3" opacity="0.9"></path>
+        </svg>
+      </sc-if>
+      <span>{{rotuloBotao}}</span>
+    </button>
+
+  </div>
+
+  <div style="display: flex; flex-direction: column; padding: 16px 28px 0 28px; min-height: 78px;">
+
+    <sc-if value="{{deuCerto}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; background: #f2fbea; border: 1px solid #c5efa7; border-radius: 8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#46921e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;">
+          <path d="M20 6.5 L9.6 17 L4.5 12"></path>
+        </svg>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 13px; font-weight: 600; color: #37701b;">Funcionou</span>
+          <span style="font-size: 12.5px; line-height: 1.5; color: #46921e;">O proxy respondeu e o acesso foi aceito. Abrindo o MS Proxy…</span>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{deuErro}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; background: #fff0f1; border: 1px solid #ffbbc0; border-radius: 8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f8131c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;">
+          <path d="M12 7.5 V13"></path>
+          <path d="M12 16.6 V16.7"></path>
+          <path d="M12 3.6 A8.4 8.4 0 1 0 12 20.4 A8.4 8.4 0 0 0 12 3.6 Z"></path>
+        </svg>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 13px; font-weight: 600; color: #d1040c;">{{tituloErro}}</span>
+          <span style="font-size: 12.5px; line-height: 1.5; color: #414141;">{{textoErro}}</span>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 0 28px 20px 28px;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#858585" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 10.5 V7.8 A5 5 0 0 1 17 7.8 V10.5"></path>
+      <rect x="4.8" y="10.5" width="14.4" height="9.2" rx="2.2"></rect>
+    </svg>
+    <span style="font-size: 11.5px; line-height: 1.5; color: #858585;">Esses dados ficam guardados só neste computador.</span>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":460,"height":668}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { endereco: '', usuario: '', senha: '', fase: 'idle' };
+  }
+
+  renderVals() {
+    const fase = this.state.fase;
+    const testando = fase === 'testando';
+    const deuCerto = fase === 'ok';
+    const erros = {
+      vazio:    { titulo: 'Faltou preencher', texto: 'Preencha o endereço, o usuário e a senha.' },
+      semrota:  { titulo: 'Endereço não encontrado', texto: 'Não existe nenhum proxy nesse endereço. Confira se está escrito certo.' },
+      // O proxy não distingue usuário errado de senha errada, então a
+      // mensagem não pode fingir que sabe qual dos dois falhou.
+      recusada: { titulo: 'Usuário ou senha recusados', texto: 'O proxy não aceitou esses dados. Confira o usuário: o formato varia de um proxy para outro.' },
+      offline:  { titulo: 'Proxy não respondeu', texto: 'Não conseguimos falar com o proxy agora. Tente de novo em instantes.' },
+    };
+    const erro = erros[fase] || null;
+
+    const aoDigitarEndereco = (e) => this.setState({ endereco: e.target.value, fase: 'idle' });
+    const aoDigitarUsuario = (e) => this.setState({ usuario: e.target.value, fase: 'idle' });
+    const aoDigitar = (e) => this.setState({ senha: e.target.value, fase: 'idle' });
+
+    const testar = () => {
+      if (this.state.fase === 'testando') return;
+      const end = this.state.endereco.trim();
+      const u = this.state.usuario.trim();
+      const s = this.state.senha.trim();
+      if (!end || !u || !s) { this.setState({ fase: 'vazio' }); return; }
+      this.setState({ fase: 'testando' });
+      setTimeout(() => {
+        // Sequência de demonstração: "errada" reprova, "offline" simula o
+        // proxy fora do ar, qualquer outra senha é aceita.
+        const v = s.toLowerCase();
+        const proxima = v === 'errada' ? 'recusada'
+          : (v === 'offline' ? 'offline'
+          : (v === 'endereco' ? 'semrota' : 'ok'));
+        this.setState({ fase: proxima });
+      }, 1400);
+    };
+
+    // O endereço erra sozinho; usuário e senha erram juntos, porque o
+    // proxy responde "recusado" sem dizer qual dos dois falhou.
+    const campoRuim = fase === 'vazio' || fase === 'recusada';
+    const enderecoRuim = fase === 'vazio' || fase === 'semrota';
+
+    return {
+      endereco: this.state.endereco,
+      aoDigitarEndereco,
+      corBordaEndereco: enderecoRuim ? '#ff8996' : (deuCerto ? '#c5efa7' : '#d1d1d1'),
+      usuario: this.state.usuario,
+      senha: this.state.senha,
+      aoDigitarUsuario, aoDigitar, testar,
+      testando,
+      ocupado: testando,
+      deuCerto,
+      deuErro: !!erro,
+      tituloErro: erro ? erro.titulo : '',
+      textoErro: erro ? erro.texto : '',
+      rotuloBotao: testando ? 'Testando o acesso…' : (deuCerto ? 'Tudo certo' : 'Testar e continuar'),
+      corBotao: deuCerto ? '#46921e' : (testando ? '#ff8996' : '#fd5260'),
+      corBorda: campoRuim ? '#ff8996' : (deuCerto ? '#c5efa7' : '#d1d1d1'),
+      corBordaUsuario: campoRuim ? '#ff8996' : (deuCerto ? '#c5efa7' : '#d1d1d1'),
+    };
+  }
+}
+</script>
+</body>
+</html>

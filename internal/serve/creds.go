@@ -14,14 +14,25 @@ const GlobalPasswordEnv = "PROXY_HELPER_PASSWORD"
 
 // Resolve returns the credentials the daemon should present upstream.
 //
-// Sources are tried in order: the profile's password_file, the profile's
-// password_env, the global PROXY_HELPER_PASSWORD, and finally the legacy
-// plaintext "pass" field. deprecated is true only for that last case, so the
-// caller can warn once at startup instead of on every request.
+// Sources are tried in order: the profile's password_protected (a blob only
+// the current OS user can decrypt), its password_file, its password_env, the
+// global PROXY_HELPER_PASSWORD, and finally the legacy plaintext "pass"
+// field. deprecated is true only for that last case, so the caller can warn
+// once at startup instead of on every request.
 //
 // A missing password is not an error: plenty of proxies need no auth.
 func Resolve(cfg proxy.Config) (user, pass string, deprecated bool, err error) {
 	user = cfg.Username
+
+	// First, because it is the only source that is not readable by anything
+	// else running as this user, and the one the Windows build writes.
+	if cfg.PasswordProtected != "" {
+		pass, unprotectErr := unprotect(cfg.PasswordProtected)
+		if unprotectErr != nil {
+			return user, "", false, unprotectErr
+		}
+		return user, pass, false, nil
+	}
 
 	if cfg.PasswordFile != "" {
 		info, statErr := os.Stat(cfg.PasswordFile)

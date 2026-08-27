@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Poppins', 'Segoe UI', system-ui, sans-serif; background: #FBFBFB; color: #181718; }
+    a { color: #2283EE; } a:hover { color: #1967D2; }
+    button { font-family: inherit; cursor: pointer; }
+  </style>
+</helmet>
+
+<div style="display: flex; flex-direction: column; width: 460px; height: 540px; background: #FBFBFB; box-sizing: border-box;">
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 18px 28px 0 28px;">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="{{corMarca}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3 L20 6.2 V12 C20 16.6 16.5 20 12 21.2 C7.5 20 4 16.6 4 12 V6.2 Z"></path>
+      <path d="M8.8 12 H14.6"></path>
+      <path d="M12.5 9.9 L15.2 12 L12.5 14.1"></path>
+    </svg>
+    <span style="font-size: 13px; font-weight: 500; color: #858585;">MS Proxy</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 40px 28px 0 28px;">
+
+    <div style="display: flex; align-items: center; justify-content: center; width: 96px; height: 96px; border-radius: 50%; background: {{fundoSelo}}; border: 2px solid {{bordaSelo}};">
+      <sc-if value="{{ligado}}" hint-placeholder-val="{{ true }}">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#46921e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 L20 6.2 V12 C20 16.6 16.5 20 12 21.2 C7.5 20 4 16.6 4 12 V6.2 Z"></path>
+          <path d="M8.6 12.1 L11 14.4 L15.6 9.9"></path>
+        </svg>
+      </sc-if>
+      <sc-if value="{{desligado}}" hint-placeholder-val="{{ false }}">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#b0b0b0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 L20 6.2 V12 C20 16.6 16.5 20 12 21.2 C7.5 20 4 16.6 4 12 V6.2 Z"></path>
+          <path d="M9.4 9.4 L14.6 14.6"></path>
+          <path d="M14.6 9.4 L9.4 14.6"></path>
+        </svg>
+      </sc-if>
+    </div>
+
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+      <span style="font-size: 30px; font-weight: 600; line-height: 1.1; color: {{corEstado}};">{{rotuloEstado}}</span>
+      <span style="font-size: 13.5px; line-height: 1.5; color: #5d5d5d; text-align: center; max-width: 320px; text-wrap: pretty;">{{explicacao}}</span>
+    </div>
+
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 16px; padding: 34px 28px 0 28px;">
+
+    <button onClick="{{alternar}}" style="height: 46px; font-size: 14px; font-weight: 600; color: {{corTextoBotao}}; background: {{fundoBotao}}; border: 1px solid {{bordaBotao}}; border-radius: 8px;">{{rotuloBotao}}</button>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: #ffffff; border: 1px solid #e7e7e7; border-radius: 8px;">
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <span style="font-size: 11.5px; color: #858585;">Perfil</span>
+        <span style="font-size: 13.5px; font-weight: 500; color: #181718;">{{perfil}}</span>
+      </div>
+      <button onClick="{{trocarPerfil}}" style="display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; font-size: 12.5px; font-weight: 500; color: #414141; background: #f6f6f6; border: 1px solid #e7e7e7; border-radius: 8px;">
+        <span>Trocar</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6d6d6d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6.5 9.5 L12 15 L17.5 9.5"></path>
+        </svg>
+      </button>
+    </div>
+
+  </div>
+
+  <div style="display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: auto; padding: 0 28px 20px 28px;">
+    <a href="#" style="font-size: 11.5px; text-decoration: none;">Ver diagnóstico</a>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":460,"height":540}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { ligado: true, perfilIdx: 0 };
+  }
+
+  renderVals() {
+    const perfis = ['Escritório', 'Casa'];
+    const ligado = this.state.ligado;
+
+    return {
+      ligado,
+      desligado: !ligado,
+      corMarca: '#fd5260',
+      rotuloEstado: ligado ? 'Ligado' : 'Desligado',
+      // Verde para o estado positivo — nunca a primária, que é vermelha.
+      corEstado: ligado ? '#46921e' : '#858585',
+      fundoSelo: ligado ? '#f2fbea' : '#f6f6f6',
+      bordaSelo: ligado ? '#c5efa7' : '#e7e7e7',
+      explicacao: ligado
+        ? 'Sua internet está passando pelo proxy. Tudo funcionando.'
+        : 'Sua internet está saindo direto, sem passar pelo proxy.',
+      rotuloBotao: ligado ? 'Desligar o proxy' : 'Ligar o proxy',
+      fundoBotao: ligado ? '#ffffff' : '#fd5260',
+      corTextoBotao: ligado ? '#414141' : '#ffffff',
+      bordaBotao: ligado ? '#d1d1d1' : '#fd5260',
+      perfil: perfis[this.state.perfilIdx],
+      alternar: () => this.setState({ ligado: !this.state.ligado }),
+      trocarPerfil: () => this.setState({ perfilIdx: (this.state.perfilIdx + 1) % perfis.length }),
+    };
+  }
+}
+</script>
+</body>
+</html>

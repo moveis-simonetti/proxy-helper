@@ -10,12 +10,15 @@ import (
 func TestTrimmedCleansPastedFields(t *testing.T) {
 	// Pasting from a chat message carries whitespace, and a proxy rejects
 	// "gestao " exactly as it rejects a wrong password.
-	got := SetupFields{Address: "  proxy.interno:3128 ", Username: " gestao\t"}.Trimmed()
+	got := SetupFields{Name: " Escritório ", Address: "  proxy.interno:3128 ", Username: " gestao\t"}.Trimmed()
 	if got.Address != "proxy.interno:3128" {
 		t.Errorf("Address = %q, want %q", got.Address, "proxy.interno:3128")
 	}
 	if got.Username != "gestao" {
 		t.Errorf("Username = %q, want %q", got.Username, "gestao")
+	}
+	if got.Name != "Escritório" {
+		t.Errorf("Name = %q, want %q", got.Name, "Escritório")
 	}
 }
 
@@ -28,17 +31,20 @@ func TestTrimmedKeepsThePasswordExactly(t *testing.T) {
 	}
 }
 
-func TestCompleteRequiresAllThreeFields(t *testing.T) {
-	full := SetupFields{Address: "proxy.interno:3128", Username: "gestao", Password: "senha"}
+func TestCompleteRequiresEveryField(t *testing.T) {
+	full := SetupFields{Name: "Escritório", Address: "proxy.interno:3128", Username: "gestao", Password: "senha"}
 	if !full.Complete() {
 		t.Error("a fully filled form reported incomplete")
 	}
 
 	for name, f := range map[string]SetupFields{
-		"no address":  {Username: "gestao", Password: "senha"},
-		"no username": {Address: "proxy.interno:3128", Password: "senha"},
-		"no password": {Address: "proxy.interno:3128", Username: "gestao"},
-		"only spaces": {Address: "  ", Username: " ", Password: "senha"},
+		// The name is required like the rest: a profile nobody named is a
+		// row in a list nobody can read.
+		"no name":     {Address: "proxy.interno:3128", Username: "gestao", Password: "senha"},
+		"no address":  {Name: "Escritório", Username: "gestao", Password: "senha"},
+		"no username": {Name: "Escritório", Address: "proxy.interno:3128", Password: "senha"},
+		"no password": {Name: "Escritório", Address: "proxy.interno:3128", Username: "gestao"},
+		"only spaces": {Name: " ", Address: "  ", Username: " ", Password: "senha"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if f.Complete() {

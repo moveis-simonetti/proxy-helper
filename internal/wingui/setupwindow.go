@@ -25,8 +25,9 @@ import (
 type setupScreen struct {
 	fields   SetupFields
 	phase    SetupPhase
-	onDone   func(proxy.Config, string, string)
+	onDone   func(name string, cfg proxy.Config, user, pass string)
 	cancel   context.CancelFunc
+	nameIn   *widget.Entry
 	addrIn   *widget.Entry
 	userIn   *widget.Entry
 	passIn   *widget.Entry
@@ -35,8 +36,17 @@ type setupScreen struct {
 	content  *fyne.Container
 }
 
-func newSetupScreen(onDone func(cfg proxy.Config, user, pass string)) *setupScreen {
+// newSetupScreen builds the form. initial pre-fills it, which is what makes
+// this screen serve editing as well as first-run: the fields and the real
+// probe are identical, and a second near-copy of them would only drift.
+//
+// The password is never pre-filled, even when editing. It is stored
+// encrypted and cannot be read back for display — and showing a row of dots
+// that stands for a value we cannot verify would be a worse lie than an
+// empty field.
+func newSetupScreen(initial SetupFields, onDone func(name string, cfg proxy.Config, user, pass string)) *setupScreen {
 	s := &setupScreen{phase: PhaseIdle, onDone: onDone}
+	s.fields = SetupFields{Name: initial.Name, Address: initial.Address, Username: initial.Username}
 
 	title := canvas.NewText("Configurar o MS Proxy", colorForeground)
 	title.TextSize = 24
@@ -45,11 +55,18 @@ func newSetupScreen(onDone func(cfg proxy.Config, user, pass string)) *setupScre
 	intro := widget.NewLabel("Informe o endereço do proxy e seu acesso.\nÉ só desta vez — depois fica tudo guardado.")
 	intro.Wrapping = fyne.TextWrapWord
 
+	s.nameIn = widget.NewEntry()
+	s.nameIn.SetText(s.fields.Name)
+	s.nameIn.SetPlaceHolder("Escritório, Casa…")
+	s.nameIn.OnChanged = func(v string) { s.fields.Name = v; s.setPhase(PhaseIdle) }
+
 	s.addrIn = widget.NewEntry()
+	s.addrIn.SetText(s.fields.Address)
 	s.addrIn.SetPlaceHolder("proxy.interno:3128 ou o endereço de um arquivo .pac")
 	s.addrIn.OnChanged = func(v string) { s.fields.Address = v; s.setPhase(PhaseIdle) }
 
 	s.userIn = widget.NewEntry()
+	s.userIn.SetText(s.fields.Username)
 	s.userIn.SetPlaceHolder("usuário de acesso ao proxy")
 	s.userIn.OnChanged = func(v string) { s.fields.Username = v; s.setPhase(PhaseIdle) }
 
@@ -65,6 +82,7 @@ func newSetupScreen(onDone func(cfg proxy.Config, user, pass string)) *setupScre
 	// A plain VBox, not a custom layout: Fyne already sizes a label above
 	// its field correctly, and the hand-rolled one overlapped them.
 	form := container.NewVBox(
+		widget.NewLabel("Nome do perfil"), s.nameIn,
 		widget.NewLabel("Endereço do proxy"), s.addrIn,
 		widget.NewLabel("Usuário do proxy"), s.userIn,
 		widget.NewLabel("Senha"), s.passIn,
@@ -116,7 +134,7 @@ func (s *setupScreen) submit() {
 		fyne.Do(func() {
 			s.setPhase(phase)
 			if phase == PhaseOK && s.onDone != nil {
-				s.onDone(cfg, fields.Username, fields.Password)
+				s.onDone(fields.Name, cfg, fields.Username, fields.Password)
 			}
 		})
 	}()

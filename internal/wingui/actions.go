@@ -2,6 +2,7 @@ package wingui
 
 import (
 	"fmt"
+	"os"
 	"slices"
 
 	"proxy-helper/internal/app"
@@ -23,11 +24,23 @@ func deps() app.Deps {
 	}
 }
 
-// executor returns the executor the interface acts through. Nothing here is
-// ever a dry run: a person pressing a button means it.
+// dryRunEnv turns every write into a preview.
+//
+// It exists for looking at the interface on a machine you do not want it to
+// reconfigure — this app is developed on Linux, where "apply" would rewrite
+// the developer's own shell, git and desktop settings. It is opt-in through
+// the environment and never set by the app itself, so a real user cannot end
+// up in it by accident and believe a change was applied.
+const dryRunEnv = "MSPROXY_DRY_RUN"
+
+// executor returns the executor the interface acts through.
 func executor() *proxy.Executor {
-	return &proxy.Executor{}
+	return &proxy.Executor{DryRun: os.Getenv(dryRunEnv) != ""}
 }
+
+// DryRun reports whether writes are being previewed rather than made, so the
+// window can say so instead of claiming a change it did not make.
+func DryRun() bool { return os.Getenv(dryRunEnv) != "" }
 
 // TurnOn points the system proxy at the local daemon and marks the profile
 // active.
@@ -102,4 +115,16 @@ func Profiles() (names []string, active string, err error) {
 	}
 	slices.Sort(names)
 	return names, pf.ActiveProfile, nil
+}
+
+// UpstreamTrouble reports what the daemon last observed about the proxy,
+// and for which profile.
+//
+// The daemon is a separate process, so this is the only way the window
+// learns that something stopped working. Without it the person would see
+// pages failing and find no explanation in the one app that exists to
+// manage the proxy.
+func UpstreamTrouble() (problem serve.UpstreamProblem, profile string) {
+	state := serve.ReadUpstreamState()
+	return state.Problem, state.Profile
 }

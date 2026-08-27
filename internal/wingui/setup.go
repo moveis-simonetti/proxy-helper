@@ -35,6 +35,10 @@ const (
 
 // SetupFields is what the person typed.
 type SetupFields struct {
+	// Name is what this profile is called. It is the person's own word for
+	// "the office" or "home" — the app never invents it, because a list of
+	// profiles nobody named is a list nobody can read.
+	Name     string
 	Address  string
 	Username string
 	Password string
@@ -48,6 +52,7 @@ type SetupFields struct {
 // looked right.
 func (f SetupFields) Trimmed() SetupFields {
 	return SetupFields{
+		Name:     strings.TrimSpace(f.Name),
 		Address:  strings.TrimSpace(f.Address),
 		Username: strings.TrimSpace(f.Username),
 		// The password is deliberately NOT trimmed: a trailing space can be
@@ -60,7 +65,7 @@ func (f SetupFields) Trimmed() SetupFields {
 // Complete reports whether all three fields carry something.
 func (f SetupFields) Complete() bool {
 	t := f.Trimmed()
-	return t.Address != "" && t.Username != "" && t.Password != ""
+	return t.Name != "" && t.Address != "" && t.Username != "" && t.Password != ""
 }
 
 // PhaseFor maps a probe outcome to the phase the screen should show.
@@ -95,7 +100,7 @@ func MessageFor(phase SetupPhase) (Message, bool) {
 	case PhaseIncomplete:
 		return Message{
 			Title: "Faltou preencher",
-			Body:  "Preencha o endereço, o usuário e a senha.",
+			Body:  "Preencha o nome, o endereço, o usuário e a senha.",
 			Bad:   true,
 		}, true
 	case PhaseOK:

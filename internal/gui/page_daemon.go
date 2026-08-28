@@ -537,7 +537,8 @@ func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, b
 	dp.primaryBtn.SetLabel(daemonPrimaryActionLabel(installed))
 	dp.removeBtn.SetVisible(installed)
 
-	dp.resultLbl.SetText("")
+	dp.resultLbl.SetText(dp.pendingResult)
+	dp.pendingResult = ""
 	dp.refreshActionState()
 }
 

@@ -41,10 +41,15 @@ func InstallUnit(ex *proxy.Executor, execPath string, port int, dockerBridge boo
 	if err := ex.SetRegistryString(runKeyPath, TaskName, command); err != nil {
 		return fmt.Errorf("registering the proxy to start at logon: %w", err)
 	}
-	if err := ex.StartDetached(execPath, "proxy", "serve", "--port", strconv.Itoa(port)); err != nil {
-		return err
+
+	// Starting is conditional, registering is not. A daemon someone started
+	// by hand answers on the port and makes this look done, while nothing
+	// would bring it back after a reboot — the machine works until it is
+	// restarted, which is the worst moment to discover it.
+	if DaemonActive() {
+		return nil
 	}
-	return nil
+	return ex.StartDetached(execPath, "proxy", "serve", "--port", strconv.Itoa(port))
 }
 
 // UninstallUnit stops the daemon and unregisters it. Anything already gone
@@ -58,6 +63,17 @@ func UninstallUnit(ex *proxy.Executor) error {
 	_ = ex.Run("schtasks", "/Delete", "/TN", TaskName, "/F")
 	_ = ex.Run("taskkill", "/IM", "proxy-helper.exe", "/F")
 	return nil
+}
+
+// AutostartRegistered reports whether the daemon will come back after a
+// restart.
+//
+// Separate from DaemonActive because the two can disagree in the direction
+// that hurts: a daemon running right now, with nothing registered to start
+// it again, is a machine that works until it is rebooted.
+func AutostartRegistered(ex *proxy.Executor) bool {
+	value, ok := ex.GetRegistryString(runKeyPath, TaskName)
+	return ok && value != ""
 }
 
 // DaemonActive reports whether the daemon is answering.

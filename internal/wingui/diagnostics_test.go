@@ -16,8 +16,11 @@ func healthy() DiagnosticsInput {
 		DaemonRunning: true,
 		SystemApplied: true,
 		Autostart:     true,
-		NoProxyCount:  4,
-		HasProfile:    true,
+		// A machine is only healthy if the proxy also survives a restart:
+		// working until the next reboot is a failure with a delay on it.
+		DaemonAutostart: true,
+		NoProxyCount:    4,
+		HasProfile:      true,
 	}
 }
 
@@ -168,5 +171,35 @@ func TestBackgroundCheckIsAProblemWhenTheProxyIsOn(t *testing.T) {
 
 	if got.State != CheckBad {
 		t.Errorf("state = %q, want %q", got.State, CheckBad)
+	}
+}
+
+// Working now says nothing about surviving a restart, and the person who
+// finds out by losing internet access on a Monday morning has no way to
+// connect it to anything they did.
+func TestBackgroundCheckFlagsADaemonThatWillNotComeBack(t *testing.T) {
+	in := DiagnosticsInput{
+		HasProfile: true, SystemApplied: true,
+		DaemonRunning: true, DaemonAutostart: false,
+	}
+
+	got := findCheck(t, Diagnostics(in), "Serviço em segundo plano")
+
+	if got.State != CheckBad {
+		t.Errorf("state = %q, want a problem when nothing will restart the proxy", got.State)
+	}
+}
+
+// The healthy case must stay quiet.
+func TestBackgroundCheckIsHappyWhenTheProxyComesBack(t *testing.T) {
+	in := DiagnosticsInput{
+		HasProfile: true, SystemApplied: true,
+		DaemonRunning: true, DaemonAutostart: true,
+	}
+
+	got := findCheck(t, Diagnostics(in), "Serviço em segundo plano")
+
+	if got.State != CheckOK {
+		t.Errorf("state = %q, want %q", got.State, CheckOK)
 	}
 }

@@ -39,8 +39,12 @@ type DiagnosticsInput struct {
 	SystemApplied bool
 	SystemDetail  string
 	Autostart     bool
-	NoProxyCount  int
-	HasProfile    bool
+	// DaemonAutostart: whether the proxy comes back after a restart. Its
+	// own field because a running daemon says nothing about this, and the
+	// two disagreeing is exactly the failure worth reporting.
+	DaemonAutostart bool
+	NoProxyCount    int
+	HasProfile      bool
 }
 
 // Diagnostics turns the machine's state into lines a person can read.
@@ -136,16 +140,30 @@ func backgroundCheck(in DiagnosticsInput) Check {
 			State:  CheckBad,
 		}
 	}
-	detail := "rodando"
-	if in.Autostart {
-		detail = "rodando, e inicia junto com o computador"
+	if !in.DaemonAutostart {
+		// Working now, gone after a restart. Reported as a problem because
+		// the person would otherwise find out by losing internet access on
+		// a morning when nothing appears to have changed.
+		return Check{
+			Title:  "Serviço em segundo plano",
+			Detail: "rodando, mas não vai voltar sozinho depois de reiniciar",
+			State:  CheckBad,
+		}
 	}
-	return Check{Title: "Serviço em segundo plano", Detail: detail, State: CheckOK}
+	return Check{
+		Title:  "Serviço em segundo plano",
+		Detail: "rodando, e inicia junto com o computador",
+		State:  CheckOK,
+	}
 }
 
 // CollectDiagnostics reads the machine and builds the input.
 func CollectDiagnostics() DiagnosticsInput {
-	in := DiagnosticsInput{DaemonRunning: serve.DaemonActive(), Autostart: AutostartEnabled()}
+	in := DiagnosticsInput{
+		DaemonRunning:   serve.DaemonActive(),
+		Autostart:       AutostartEnabled(),
+		DaemonAutostart: daemonAutostartRegistered(),
+	}
 
 	pf, err := proxy.LoadProfiles()
 	if err != nil {

@@ -43,9 +43,6 @@ func findCLI() (string, error) {
 // nothing listens on. The failure mode is the worst kind — the app reports
 // success and the person loses internet access entirely.
 func EnsureDaemon() error {
-	if serve.DaemonActive() {
-		return nil
-	}
 	if DryRun() {
 		// Nothing was written, so nothing will answer. Waiting for a daemon
 		// that was never installed would fail every action in the mode that
@@ -63,6 +60,10 @@ func EnsureDaemon() error {
 		return err
 	}
 
+	// Always: InstallUnit registers the logon entry and starts the daemon
+	// only if nothing is answering yet. Skipping it when the daemon happens
+	// to be running was how a machine ended up working now and losing the
+	// proxy at the next restart.
 	ex := executor()
 	if err := serve.InstallUnit(ex, execPath, pf.EffectiveLocalPort(), false); err != nil {
 		return fmt.Errorf("não foi possível iniciar o serviço do proxy: %w", err)

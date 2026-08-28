@@ -58,6 +58,8 @@ Todo comando que mexe em configurações de proxy aceita `--targets`, uma lista
 separada por vírgula (ou `all`, o padrão):
 
 - `shell` — `~/.bashrc` / `~/.zshrc`
+- `session-env` — variáveis de ambiente da sessão gráfica, para aplicativos
+  de janela (veja abaixo)
 - `git`
 - `npm`
 - `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato (Cursor, Antigravity)
@@ -73,6 +75,37 @@ Targets não disponíveis no sistema atual (ex: `gnome` fora de uma sessão
 GNOME, `kde` fora do Plasma, `snap`/`lxd` onde o pacote correspondente não
 está instalado) são pulados automaticamente.
 
+### `session-env` e aplicativos de janela
+
+O target `shell` alcança apenas terminais: `~/.bashrc` e `~/.zshrc` são lidos
+quando você abre um shell, não quando o GNOME lança um aplicativo pelo menu.
+Aplicativos como 1Password, Discord e Postman têm componentes nativos que
+leem `HTTPS_PROXY` do próprio ambiente e ignoram as configurações do GNOME —
+sem `session-env`, eles ficam sem internet enquanto o resto do sistema
+funciona.
+
+`session-env` fecha esse buraco escrevendo em duas camadas:
+
+- `~/.config/environment.d/50-proxy-helper.conf`, lido pelo `systemd --user`
+  no login, para a configuração sobreviver a reinicializações;
+- `systemctl --user set-environment` e `dbus-update-activation-environment`,
+  que valem imediatamente, para aplicativos abertos a partir de agora.
+
+**Aplicativos já em execução não são afetados.** O ambiente de um processo é
+fixado no momento em que ele é iniciado e não pode ser reescrito de fora —
+limitação do sistema operacional, não da ferramenta. Depois de aplicar (ou de
+trocar a porta do daemon), feche e abra os aplicativos de janela para que eles
+peguem a configuração nova. Quando a sessão viva discorda do perfil, o
+`proxy status` avisa:
+
+```
+session-env  true  true  http://127.0.0.1:8888 — profile uses port 9090; re-apply, then relaunch GUI apps
+```
+
+Fora de uma sessão gráfica (servidor, container, SSH puro) não há
+`systemd --user` para conversar, e o target é pulado como qualquer outro
+indisponível.
+
 `proxy unset --targets gnome` também limpa o cache de proxy do PackageKit
 (usado por GNOME Software/Discover) quando presente, contornando um bug
 onde ele mantém o proxy antigo mesmo depois do proxy do sistema ser
@@ -83,7 +116,7 @@ desligado; isso pode pedir sudo mesmo sem `snap`/`apt` no `--targets`.
 ```
 proxy-helper proxy set --host 10.0.0.5 --port 8080 [--scheme http|https|socks5] \
   [--user USER] [--pass PASS] [--no-proxy localhost,127.0.0.1] \
-  [--targets shell,git,npm,...] [--dry-run]
+  [--targets shell,session-env,git,...] [--dry-run]
 
 proxy-helper proxy unset [--targets ...] [--dry-run]
 
@@ -355,6 +388,38 @@ arranque, e é o passo que mais se esquece.
 
 Sem a flag, o `proxy set --via-local` avisa que os builds vão falhar em vez de
 deixar você descobrir no meio de um deploy.
+
+#### Node.js dentro de containers
+
+O `docker-config` injeta as variáveis de proxy nos containers, mas o Docker só
+repassa as chaves que ele conhece (`httpProxy`, `httpsProxy`, `noProxy`,
+`ftpProxy`, `allProxy`) — não há como acrescentar outras. Isso importa para
+Node, que tem dois comportamentos diferentes:
+
+- **`npm`, `yarn`, `pnpm`, `axios` e afins funcionam.** Essas ferramentas leem
+  `HTTPS_PROXY` por conta própria.
+- **O `fetch()` global do Node ignora `HTTPS_PROXY`** e falha com
+  `ENETUNREACH`. Ele só respeita a variável quando `NODE_USE_ENV_PROXY=1`
+  também está no ambiente — e essa não é repassada pelo Docker.
+
+Para Node 22 e 24, resolva na imagem:
+
+```dockerfile
+ENV NODE_USE_ENV_PROXY=1
+```
+
+No Node 20 a variável não existe (foi adicionada no 22), então só a própria
+aplicação pode rotear o `fetch`:
+
+```js
+// no topo do ponto de entrada, antes do primeiro fetch()
+import { setGlobalDispatcher, EnvHttpProxyAgent } from "undici";
+setGlobalDispatcher(new EnvHttpProxyAgent());
+```
+
+`EnvHttpProxyAgent` (e não `ProxyAgent`) porque ele respeita `NO_PROXY`,
+mantendo o tráfego interno fora do proxy. Funciona igual em todas as versões
+do Node, então serve como solução única para quem mantém imagens variadas.
 
 ### Modo de falha
 

@@ -55,8 +55,12 @@ func (t *shellTarget) Set(ex *Executor, cfg Config) error {
 	// Node's global fetch ignores the classic variables above: undici only
 	// reads them when this one is set. Without it, every Node CLI that uses
 	// fetch fails with ENETUNREACH while curl and git work fine — a confusing
-	// split that costs real debugging time. Node 24 made it the default;
-	// setting it on older versions is what makes them behave the same.
+	// split that costs real debugging time. The variable was added in Node
+	// 22 and is still required in Node 24 (verified on v24.20.0: fetch
+	// without it fails ENETUNREACH), so it is never redundant to export.
+	// Node 20 does not have it at all — there, only the application itself
+	// can route fetch through a proxy, by installing an undici
+	// EnvHttpProxyAgent as the global dispatcher.
 	fmt.Fprintln(&b, "export NODE_USE_ENV_PROXY=1")
 
 	files := t.rcFiles()

@@ -64,6 +64,25 @@ type daemonPage struct {
 	primaryBtn *gtk.Button
 	resultLbl  *gtk.Label
 
+	// staleTargetsBtn appears only after a port change left the targets on
+	// the old port. It navigates to the Status page instead of applying
+	// here: applying needs the target selection, the pkexec path and the
+	// report display, all of which live on that page. Duplicating them
+	// would fork the apply logic; reaching into statusPage would couple two
+	// pages that today know nothing of each other.
+	staleTargetsBtn *gtk.Button
+	// stack is the window's page switcher, held only so the button above
+	// can bring the user to "status".
+	stack *gtk.Stack
+
+	// pendingResult survives the load() that every action fires on its way
+	// out. load() is asynchronous and its callback (applyLoad) clears
+	// resultLbl, so a message written before it lands is wiped a moment
+	// later — which is why "alterações aplicadas" only ever flickered.
+	// applyLoad shows this instead of clearing, then empties it, so the
+	// next plain reload still starts clean.
+	pendingResult string
+
 	// installed mirrors what load() last found on disk (serve.UnitPath()
 	// exists). Read by refreshActionState and daemonPrimaryActionLabel; not
 	// read from a widget because there is no widget for it — this page has
@@ -323,6 +342,21 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	win.DaemonPage.PackStart(resultLbl, false, false, 0)
 	dp.resultLbl = resultLbl
 
+	staleTargetsBtn, err := gtk.ButtonNewWithLabel("Reaplicar alvos")
+	if err != nil {
+		return nil, err
+	}
+	staleTargetsBtn.SetHAlign(gtk.ALIGN_START)
+	staleTargetsBtn.SetNoShowAll(true)
+	staleTargetsBtn.SetVisible(false)
+	staleTargetsBtn.Connect("clicked", func() {
+		dp.stack.SetVisibleChildName("status")
+		dp.setStaleTargetsBtnVisible(false)
+	})
+	win.DaemonPage.PackStart(staleTargetsBtn, false, false, 0)
+	dp.staleTargetsBtn = staleTargetsBtn
+	dp.stack = win.Stack
+
 	if err := dp.setupLogsBlock(win); err != nil {
 		return nil, err
 	}
@@ -575,6 +609,16 @@ func (dp *daemonPage) applyPrimary() {
 // confirmAndRemove asks for confirmation, modal and transient for the main
 // window like every other destructive dialog in this package, then removes
 // the service.
+// setStaleTargetsBtnVisible shows or hides the "Reaplicar alvos" button.
+// SetNoShowAll is set on the widget, so a ShowAll() elsewhere on this page
+// cannot make it reappear on its own once hidden.
+func (dp *daemonPage) setStaleTargetsBtnVisible(visible bool) {
+	if dp.staleTargetsBtn == nil {
+		return
+	}
+	dp.staleTargetsBtn.SetVisible(visible)
+}
+
 func (dp *daemonPage) confirmAndRemove() {
 	dlg := gtk.MessageDialogNew(dp.topWindow, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", daemonRemoveConfirm)
 	dlg.SetModal(true)

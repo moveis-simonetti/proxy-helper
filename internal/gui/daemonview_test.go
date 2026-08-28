@@ -2,6 +2,7 @@ package gui
 
 import (
 	"sort"
+	"strings"
 	"testing"
 	"time"
 

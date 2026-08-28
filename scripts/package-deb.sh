@@ -97,6 +97,27 @@ docker run --rm \
 		mkdir -p "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/share/applications"
 		go build -tags gui -ldflags "-s -w" -o "$stage/usr/bin/proxy-helper-gui" .
 
+		# The CLI ships alongside the GUI because the GUI depends on it: the
+		# targets that need root (dockerd, snap, apt) are applied by
+		# reinvoking this binary under pkexec, never by elevating a GTK
+		# process. Without it, findCLIBinary() comes up empty and those
+		# three targets fail with "could not find the proxy-helper CLI
+		# binary" — a package that installs a program missing a quarter of
+		# its function.
+		#
+		# CGO_ENABLED=0 (overriding the export above, which the GUI needs)
+		# and no "gui" build tag: this binary must not link GTK. pkexec runs
+		# it as root, and a GTK process opening a display as root is exactly
+		# what the reinvocation exists to avoid.
+		CGO_ENABLED=0 go build -ldflags "-s -w" -o "$stage/usr/bin/proxy-helper" .
+
+		# Cheap guard for the rule above: catching a GTK-linked CLI here
+		# beats shipping one. Mirrors the check the CI workflow runs.
+		if nm "$stage/usr/bin/proxy-helper" 2>/dev/null | grep -qi gtk; then
+			echo "the CLI binary linked GTK; it is reinvoked under pkexec and must not" >&2
+			exit 1
+		fi
+
 		# The menu entry. Without it the program exists only as a command to
 		# type, which is a strange thing to ask of a window with a tray icon.
 		# Icon=network-workgroup is a theme name from adwaita-icon-theme,
@@ -176,8 +197,9 @@ Description: Proxy settings manager for Linux workstations (GUI)
  apt in one step, and runs a local proxy daemon so the upstream
  credential lives in one place instead of eleven.
  .
- This package ships the graphical interface, which also includes every
- command-line subcommand.
+ This package ships both the graphical interface and the proxy-helper
+ command-line binary. The GUI needs the CLI: targets that require root
+ are applied by reinvoking it under pkexec.
 CONTROL
 
 		out="/src/dist/proxy-helper-gui_${VERSION}_${DEB_ARCH}.deb"

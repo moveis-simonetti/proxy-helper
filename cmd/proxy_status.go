@@ -93,7 +93,7 @@ func isInteractive() bool {
 }
 
 func init() {
-	proxyStatusCmd.Flags().StringSliceVar(&statusTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyStatusCmd.Flags().StringSliceVar(&statusTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyStatusCmd.Flags().BoolVarP(&statusYes, "yes", "y", false, "don't ask, immediately elevate via sudo for targets that need it")
 	proxyStatusCmd.Flags().BoolVar(&statusNoSudo, "no-sudo", false, "never elevate; show \"requires sudo to check\" instead of prompting")
 	proxyCmd.AddCommand(proxyStatusCmd)

@@ -81,7 +81,7 @@ func init() {
 	proxyImportCmd.Flags().StringSliceVar(&importNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
 	proxyImportCmd.Flags().IntVar(&importIndex, "index", 0, "which PAC proxy entry to use, when the file lists more than one")
 	proxyImportCmd.Flags().StringVar(&importSaveProfile, "save-profile", "", "save the imported config as a named profile instead of applying it")
-	proxyImportCmd.Flags().StringSliceVar(&importTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyImportCmd.Flags().StringSliceVar(&importTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyImportCmd.Flags().BoolVar(&importDryRun, "dry-run", false, "print what would change without applying it")
 	proxyCmd.AddCommand(proxyImportCmd)
 }

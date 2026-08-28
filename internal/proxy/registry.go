@@ -9,6 +9,7 @@ import (
 func AllTargets() []Target {
 	return []Target{
 		NewShellTarget(),
+		NewSessionEnvTarget(),
 		NewGitTarget(),
 		NewNpmTarget(),
 		NewVscodeTarget(),

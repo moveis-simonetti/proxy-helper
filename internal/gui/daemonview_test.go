@@ -236,3 +236,57 @@ func TestSameRowsIsTrueForTwoEmptyReads(t *testing.T) {
 		t.Error("sameRows = false para duas leituras vazias")
 	}
 }
+
+// TestPortChangeStrandsTargets covers the gap this warning exists for:
+// applyPrimary saves the new port and reinstalls the unit, but never
+// re-applies the targets, so every one of them keeps pointing at the old
+// port until the user goes back to the Status page and applies again.
+// Silently, that surfaces later as "the proxy stopped working".
+func TestPortChangeStrandsTargets(t *testing.T) {
+	if !portChangeStrandsTargets(8888, 9090, true) {
+		t.Error("a port change with via-local on leaves every target on the old port; it must warn")
+	}
+	if portChangeStrandsTargets(8888, 8888, true) {
+		t.Error("the port did not change, so nothing went stale")
+	}
+	// With via-local off the targets carry the upstream proxy directly and
+	// never referenced the daemon's port, so there is nothing to go stale.
+	if portChangeStrandsTargets(8888, 9090, false) {
+		t.Error("via-local is off; no target points at the daemon")
+	}
+}
+
+// TestStaleTargetsWarningNamesBothPorts keeps the message actionable: the
+// user needs to see what the targets still say and what they should say,
+// otherwise the warning is just noise.
+func TestStaleTargetsWarningNamesBothPorts(t *testing.T) {
+	got := staleTargetsWarning(8888, 9090)
+	if !strings.Contains(got, "8888") || !strings.Contains(got, "9090") {
+		t.Errorf("the warning must name the old and the new port, got: %q", got)
+	}
+}
+
+// TestDaemonApplyMessageCarriesTheWarning keeps the warning attached to the
+// result the user is already reading. Shown anywhere else it would compete
+// with the "alterações aplicadas" line and be missed.
+func TestDaemonApplyMessageCarriesTheWarning(t *testing.T) {
+	got := daemonApplyMessage(true, staleTargetsWarning(8888, 9090))
+	if !strings.Contains(got, "aplicadas") {
+		t.Errorf("the usual confirmation must survive, got: %q", got)
+	}
+	if !strings.Contains(got, "9090") {
+		t.Errorf("the warning must be part of the same message, got: %q", got)
+	}
+}
+
+// TestDaemonApplyMessageWithoutWarningIsUnchanged guards the normal path:
+// the warning is the exception, and its absence must leave the existing
+// message exactly as it was.
+func TestDaemonApplyMessageWithoutWarningIsUnchanged(t *testing.T) {
+	if got := daemonApplyMessage(true, ""); got != "alterações aplicadas" {
+		t.Errorf("expected the untouched confirmation, got: %q", got)
+	}
+	if got := daemonApplyMessage(false, ""); got != "serviço instalado" {
+		t.Errorf("expected the first-install message, got: %q", got)
+	}
+}

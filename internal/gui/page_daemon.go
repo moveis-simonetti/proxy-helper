@@ -533,7 +533,15 @@ func (dp *daemonPage) applyPrimary() {
 		// mirrors cmd/proxy_serve.go's "install" command: --via-local and
 		// "proxy status" read LocalPort from disk, so a unit installed
 		// before the new port is saved would briefly disagree with them.
+		// Captured inside the lock, before the overwrite: the old port is
+		// what every target still points at, and it is gone the moment the
+		// new one is saved. Reading it afterwards would always report "no
+		// change".
+		var warning string
 		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+			if portChangeStrandsTargets(lpf.EffectiveLocalPort(), form.Port, lpf.ViaLocal) {
+				warning = staleTargetsWarning(lpf.EffectiveLocalPort(), form.Port)
+			}
 			lpf.LocalPort = form.Port
 			lpf.DockerBridge = form.DockerBridge
 			return nil
@@ -555,11 +563,10 @@ func (dp *daemonPage) applyPrimary() {
 		}
 
 		return func() {
-			if wasInstalled {
-				dp.resultLbl.SetText("alterações aplicadas")
-			} else {
-				dp.resultLbl.SetText("serviço instalado")
-			}
+			// Through pendingResult, not SetText: dp.load() below would
+			// clear the label before the user could read it.
+			dp.pendingResult = daemonApplyMessage(wasInstalled, warning)
+			dp.setStaleTargetsBtnVisible(warning != "")
 			dp.load()
 		}
 	})

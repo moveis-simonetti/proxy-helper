@@ -163,3 +163,43 @@ func sameRows(a, b []logRow) bool {
 	}
 	return true
 }
+
+// portChangeStrandsTargets reports whether changing the daemon's port left
+// the targets behind.
+//
+// applyPrimary persists the new port and reinstalls the unit, but it does
+// not re-apply the targets — that is the Status page's job, over the user's
+// own selection. So every target keeps the old port until the user applies
+// again, and the failure shows up later, detached from the change that
+// caused it. This is what the warning is for.
+//
+// With via-local off, the targets carry the upstream proxy directly and
+// never referenced the daemon's port, so nothing goes stale.
+func portChangeStrandsTargets(oldPort, newPort int, viaLocal bool) bool {
+	return viaLocal && oldPort != newPort
+}
+
+// staleTargetsWarning explains the situation portChangeStrandsTargets
+// detects. It names both ports: what the targets still say, and what they
+// should say — without which the user cannot tell whether a later failure
+// is this or something else.
+func staleTargetsWarning(oldPort, newPort int) string {
+	return fmt.Sprintf(
+		"os alvos ainda apontam para a porta %d, não para %d — reaplique na aba Status",
+		oldPort, newPort)
+}
+
+// daemonApplyMessage builds the line applyPrimary shows after saving. The
+// warning rides along with the confirmation rather than in a widget of its
+// own: it belongs to the action the user just took, and a second label
+// competing with this one is a label nobody reads.
+func daemonApplyMessage(wasInstalled bool, warning string) string {
+	msg := "serviço instalado"
+	if wasInstalled {
+		msg = "alterações aplicadas"
+	}
+	if warning != "" {
+		msg += " — " + warning
+	}
+	return msg
+}

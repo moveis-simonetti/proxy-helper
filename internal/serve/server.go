@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -218,7 +219,29 @@ func (s *Server) fail(w http.ResponseWriter, up Upstream, host, method string, s
 		Method: method, Host: host, Decision: up.Kind.String(), Upstream: up.String(),
 		Status: http.StatusBadGateway, Duration: time.Since(start), Err: err.Error(),
 	}.Attrs()...)
-	s.writeGatewayError(w, fmt.Sprintf("could not reach %s: %v", target, err))
+	s.writeGatewayError(w, failMessage(target, err))
+}
+
+// failMessage phrases a proxy failure for the 502 body. The distinction
+// matters to whoever reads it in the browser or curl: a dial error means the
+// target was never reached; a timeout AFTER the dial means it WAS reached
+// and just sat silent — with an upstream proxy in between, that is usually
+// the origin server being slow, not the proxy being down. Reporting the
+// second case as "could not reach" (as this used to) sends the reader off
+// to debug connectivity that is fine.
+//
+// The dial check comes first on purpose: a dial timeout satisfies
+// net.Error.Timeout() too, and it must keep reading as unreachable.
+func failMessage(target string, err error) string {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return fmt.Sprintf("could not reach %s: %v", target, err)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return fmt.Sprintf("%s was reached, but did not answer in time — the origin server may be slow: %v", target, err)
+	}
+	return fmt.Sprintf("request to %s failed: %v", target, err)
 }
 
 // writeGatewayError answers with a plain-text 502. The body matters: it is

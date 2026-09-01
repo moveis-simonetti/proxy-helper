@@ -45,6 +45,12 @@ type ProfileFile struct {
 	// duplicate locking, atomic-write and path-resolution logic for one
 	// boolean. The CLI never reads or writes this field.
 	CloseToTray bool `json:"close_to_tray,omitempty"`
+	// LogsLive records the GUI-only preference that the Daemon page's logs
+	// table refreshes itself on a timer ("Ao vivo"). Off by default — the
+	// zero value and an absent field mean the same thing, which is what
+	// lets omitempty stand. The CLI never reads or writes this field; see
+	// CloseToTray for why GUI preferences live in this file at all.
+	LogsLive bool `json:"logs_live,omitempty"`
 	// LogsSince is the cut-off "proxy logs" and the GUI's Daemon page read
 	// from, as an RFC3339 timestamp. It is what "clearing the logs" means
 	// here, and the name is deliberate: nothing is deleted.

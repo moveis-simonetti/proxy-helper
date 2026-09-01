@@ -414,9 +414,9 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	dp.refreshLogs(true)
 	// The window has not been shown at this point — app.go calls ShowAll
 	// after every page is set up — so assume it is about to be, and let
-	// "hide"/"show"/"window-state-event" correct it from here on. With the
-	// checkbox off by default this syncLive is a no-op today, but it keeps
-	// setup honest if the default ever changes.
+	// "hide"/"show"/"window-state-event" correct it from here on. This
+	// syncLive is what starts the ticker for a user whose logs_live was
+	// restored as on; for everyone else it is a no-op.
 	dp.windowShown = true
 	dp.syncLive()
 
@@ -749,13 +749,34 @@ func (dp *daemonPage) setupLogsBlock(win *window) error {
 		return err
 	}
 	liveChk.SetTooltipText("Relê o journal a cada 2 segundos enquanto marcado.")
-	// Off by default: the live tick is a cost the user opts into, not a
-	// mode they have to remember to leave. The table still loads once on
-	// setup and on every Atualizar.
-	liveChk.SetActive(false)
+	// Off by default, restored from config.json's logs_live: the live tick
+	// is a cost the user opts into once, not a mode they have to re-enable
+	// every launch. Like buildUI's close_to_tray read, a read failure
+	// falls back to the safe default (off). SetActive runs BEFORE the
+	// toggled handler is connected, so restoring never re-writes the
+	// config or starts the ticker early — the setup tail's syncLive does
+	// that, after windowShown is decided.
+	logsLive := false
+	if pf, err := proxy.LoadProfiles(); err == nil {
+		logsLive = pf.LogsLive
+	}
+	liveChk.SetActive(logsLive)
+	dp.liveWanted = logsLive
 	liveChk.Connect("toggled", func() {
-		dp.liveWanted = liveChk.GetActive()
+		active := liveChk.GetActive()
+		dp.liveWanted = active
 		dp.syncLive()
+		// Persist like tray.go's close_to_tray: I/O off the GTK thread,
+		// inside a submitted job. Quiet — a checkbox toggle needs no busy
+		// signal, and flickering every button over a one-field write would
+		// be all a loud job bought.
+		dp.runner.submitQuiet(func() func() {
+			_ = proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+				pf.LogsLive = active
+				return nil
+			})
+			return nil
+		})
 	})
 	filterBox.PackStart(liveChk, false, false, 0)
 	dp.logsLiveChk = liveChk

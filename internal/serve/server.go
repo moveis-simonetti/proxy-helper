@@ -258,10 +258,16 @@ func (s *Server) transportFor(up Upstream) *http.Transport {
 		return t
 	}
 
+	// No ResponseHeaderTimeout, deliberately: the proxy must not be more
+	// impatient than its client. A heavy report page that takes minutes to
+	// send its first byte worked over HTTPS (the CONNECT tunnel has no such
+	// limit) but died here at the old 60s — same page, different scheme.
+	// The hung-upstream case stays covered by the client, whose own timeout
+	// or disconnect cancels req.Context() and with it the upstream request,
+	// and by the 15s dial timeout for an upstream that is actually down.
 	t := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
-		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
+		DialContext:     (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+		IdleConnTimeout: 90 * time.Second,
 	}
 	switch up.Kind {
 	case KindHTTP:

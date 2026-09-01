@@ -12,6 +12,7 @@ import (
 	"proxy-helper/internal/proxy"
 	"proxy-helper/internal/serve"
 
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -30,13 +31,6 @@ const (
 	// of surfacing a scary message. See load()'s doc comment.
 	daemonBridgeUnavailableTooltip = "bridge do Docker não está disponível nesta máquina"
 )
-
-// logsBlockLines is how many journal lines the logs block reads, the same
-// default `proxy logs --lines` uses. It is deliberately not exposed as a
-// control — the task brief's UI-to-command mapping table has no field for
-// it, and --since/--lines/--follow/--json are explicitly out of scope for
-// this first version.
-const logsBlockLines = 200
 
 // daemonPage owns the Daemon page's "Serviço" block: the read-only state
 // labels, the port and Docker bridge controls, and install/apply/remove/
@@ -145,6 +139,15 @@ type daemonPage struct {
 	// only thing that turns the pair into a decision.
 	liveWanted  bool
 	windowShown bool
+
+	// logsInFlight counts refreshes submitted but not yet delivered back.
+	// The live tick fires on wall-clock time with no idea whether the
+	// previous read finished; on a slow journal read every tick would pile
+	// one more job onto the runner's bounded queue until submitQuiet — a
+	// send on a full channel, made from the UI thread — blocked the main
+	// loop. Quiet refreshes are simply skipped while one is in flight.
+	// UI thread only.
+	logsInFlight int
 }
 
 // setupDaemonPage fills win.DaemonPage (built empty by newWindow) with the
@@ -377,15 +380,12 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 		dp.refreshActionState()
 	})
 
-	// Polling the journal every two seconds while the window is hidden in
-	// the tray is pure waste: nobody can see the table. "hide" fires on the
+	// Polling the journal every two seconds while nobody can see the table
+	// is pure waste. Two ways off screen, two signals: "hide" fires on the
 	// Window.Hide() that window.go's delete-event handler calls for
-	// close-to-tray, and "show" on the Present() the tray's "Abrir" does.
-	//
-	// Note this covers HIDDEN, not minimised: iconifying a window does not
-	// emit "hide", so a minimised window keeps ticking. That is the case
-	// the user actually raised, and widening it to iconification would mean
-	// window-state events with their own quirks per window manager.
+	// close-to-tray (and "show" on the Present() the tray's "Abrir" does);
+	// iconifying emits no hide/show at all, only "window-state-event" with
+	// the ICONIFIED bit flipping.
 	win.Window.Connect("hide", func() {
 		dp.windowShown = false
 		dp.syncLive()
@@ -393,12 +393,18 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	win.Window.Connect("show", func() {
 		dp.windowShown = true
 		dp.syncLive()
-		// Read once right now, not in two seconds. Every refresh is a full
-		// re-read of the journal's tail, so nothing that happened while
-		// hidden is lost — but waiting for the first tick would show a
-		// stale table at exactly the moment the user is looking at it.
-		if dp.liveStop != nil {
-			dp.refreshLogs(true)
+		dp.refreshOnReappear()
+	})
+	win.Window.Connect("window-state-event", func(_ *gtk.Window, ev *gdk.Event) {
+		e := gdk.EventWindowStateNewFromEvent(ev)
+		if e.ChangedMask()&gdk.WINDOW_STATE_ICONIFIED == 0 {
+			return
+		}
+		iconified := e.NewWindowState()&gdk.WINDOW_STATE_ICONIFIED != 0
+		dp.windowShown = !iconified
+		dp.syncLive()
+		if !iconified {
+			dp.refreshOnReappear()
 		}
 	})
 
@@ -406,11 +412,11 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	// Quiet: the window is still being built, and there is no click to
 	// acknowledge.
 	dp.refreshLogs(true)
-	// Explicit: the checkbox is SetActive(true) before its handler is
-	// connected, so nothing has started the ticker yet. The window has not
-	// been shown at this point either — app.go calls ShowAll after every
-	// page is set up — so assume it is about to be, and let "hide"/"show"
-	// correct it from here on.
+	// The window has not been shown at this point — app.go calls ShowAll
+	// after every page is set up — so assume it is about to be, and let
+	// "hide"/"show"/"window-state-event" correct it from here on. With the
+	// checkbox off by default this syncLive is a no-op today, but it keeps
+	// setup honest if the default ever changes.
 	dp.windowShown = true
 	dp.syncLive()
 
@@ -742,9 +748,11 @@ func (dp *daemonPage) setupLogsBlock(win *window) error {
 	if err != nil {
 		return err
 	}
-	liveChk.SetTooltipText("Relê o journal a cada 2 segundos. Desmarque para congelar a tabela e ler com calma.")
-	liveChk.SetActive(true)
-	dp.liveWanted = true
+	liveChk.SetTooltipText("Relê o journal a cada 2 segundos enquanto marcado.")
+	// Off by default: the live tick is a cost the user opts into, not a
+	// mode they have to remember to leave. The table still loads once on
+	// setup and on every Atualizar.
+	liveChk.SetActive(false)
 	liveChk.Connect("toggled", func() {
 		dp.liveWanted = liveChk.GetActive()
 		dp.syncLive()
@@ -850,6 +858,12 @@ func (dp *daemonPage) setupLogsBlock(win *window) error {
 // the two-second live tick must not, or every button in the window flickers
 // on a two-second cycle, on every page.
 func (dp *daemonPage) refreshLogs(quiet bool) {
+	// A tick that lands while the previous refresh is still in flight has
+	// nothing to add — the running read will deliver the same tail. A loud
+	// click still queues: the busy signal is the user's acknowledgement.
+	if quiet && dp.logsInFlight > 0 {
+		return
+	}
 	host, err := dp.logsHostEntry.GetText()
 	if err != nil {
 		host = ""
@@ -864,46 +878,53 @@ func (dp *daemonPage) refreshLogs(quiet bool) {
 	if quiet {
 		submit = dp.runner.submitQuiet
 	}
+	dp.logsInFlight++
 	submit(func() func() {
-		// The cut-off set by Limpar (and by "proxy logs clear") lives in the
-		// config, so it is read here, off the UI thread, on every refresh —
-		// otherwise Limpar would write it and leave the table full.
-		args := []string{"--user", "-u", serve.UnitName, "-o", "json", "--no-pager"}
-		cutoff := ""
-		if pf, err := proxy.LoadProfiles(); err == nil {
-			cutoff = pf.LogsSince
+		done := dp.refreshLogsWork(opts)
+		return func() {
+			dp.logsInFlight--
+			done()
 		}
-		if since := serve.EffectiveSince("", cutoff, false); since != "" {
-			args = append(args, "--since", since)
-		} else {
-			args = append(args, "-n", fmt.Sprint(logsBlockLines))
-		}
-
-		cmd := exec.Command("journalctl", args...)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		out, err := cmd.Output()
-		if err != nil {
-			msg := stderr.String()
-			if msg == "" {
-				msg = err.Error()
-			}
-			return func() {
-				dp.logsResultLbl.SetText(fmt.Sprintf("erro ao ler o journal: %s", msg))
-			}
-		}
-
-		entries, err := serve.ParseEntries(bytes.NewReader(out))
-		if err != nil {
-			return func() {
-				dp.logsResultLbl.SetText(fmt.Sprintf("erro ao interpretar o journal: %s", err))
-			}
-		}
-
-		rows := logRows(serve.Filter(entries, opts))
-
-		return func() { dp.applyLogs(rows) }
 	})
+}
+
+// refreshLogsWork is refreshLogs' off-UI-thread half: it runs the journal
+// read and returns the closure that renders the result. Split out so the
+// submit wrapper in refreshLogs can pair every logsInFlight++ with exactly
+// one -- on delivery, whichever of the return paths below fires.
+func (dp *daemonPage) refreshLogsWork(opts serve.FilterOptions) func() {
+	// The cut-off set by Limpar (and by "proxy logs clear") lives in the
+	// config, so it is read here, off the UI thread, on every refresh —
+	// otherwise Limpar would write it and leave the table full.
+	cutoff := ""
+	if pf, err := proxy.LoadProfiles(); err == nil {
+		cutoff = pf.LogsSince
+	}
+
+	cmd := exec.Command("journalctl", logsJournalArgs(cutoff)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := stderr.String()
+		if msg == "" {
+			msg = err.Error()
+		}
+		return func() {
+			dp.logsResultLbl.SetText(fmt.Sprintf("erro ao ler o journal: %s", msg))
+		}
+	}
+
+	entries, err := serve.ParseEntries(bytes.NewReader(out))
+	if err != nil {
+		return func() {
+			dp.logsResultLbl.SetText(fmt.Sprintf("erro ao interpretar o journal: %s", err))
+		}
+	}
+
+	rows := logRows(serve.Filter(entries, opts))
+
+	return func() { dp.applyLogs(rows) }
 }
 
 // applyLogs renders a refreshLogs result onto the table. UI thread only,
@@ -972,6 +993,18 @@ const liveInterval = 2 * time.Second
 // other by accident. UI thread only.
 func (dp *daemonPage) syncLive() {
 	dp.setLive(dp.liveWanted && dp.windowShown)
+}
+
+// refreshOnReappear reads the journal once, right now, when the window comes
+// back on screen with the live ticker armed — not in two seconds. Every
+// refresh is a full re-read of the journal's tail, so nothing that happened
+// while off screen is lost, but waiting for the first tick would show a
+// stale table at exactly the moment the user is looking at it. UI thread
+// only.
+func (dp *daemonPage) refreshOnReappear() {
+	if dp.liveStop != nil {
+		dp.refreshLogs(true)
+	}
 }
 
 // setLive starts or stops the live refresh. Idempotent in both directions:

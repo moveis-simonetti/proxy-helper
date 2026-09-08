@@ -52,6 +52,12 @@ type daemonPage struct {
 
 	bridgeSwitch  *gtk.Switch
 	bridgeWarnLbl *gtk.Label
+	// pendingLbl sits under the bridge warning and says, in words, that the
+	// form holds changes the system has not been told about. Before it, the
+	// only sign was primaryBtn turning sensitive — which a user missed,
+	// closing the window with the bridge switch on and the daemon still
+	// bound to loopback alone. See daemonPendingNotice.
+	pendingLbl *gtk.Label
 
 	reloadBtn  *gtk.Button
 	removeBtn  *gtk.Button
@@ -290,6 +296,19 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	win.DaemonPage.PackStart(bridgeWarnLbl, false, false, 0)
 	dp.bridgeWarnLbl = bridgeWarnLbl
 
+	pendingLbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, err
+	}
+	pendingLbl.SetXAlign(0)
+	// Same indentation as the caption above it, but deliberately not
+	// dim-label: this one is the opposite of a caption. It appears only
+	// when something is wrong-ish and needs to compete for attention with
+	// the primary button it names.
+	pendingLbl.SetMarginStart(spaceSection)
+	win.DaemonPage.PackStart(pendingLbl, false, false, 0)
+	dp.pendingLbl = pendingLbl
+
 	buttons, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
 	if err != nil {
 		return nil, err
@@ -438,15 +457,22 @@ func (dp *daemonPage) readForm() daemonFormValues {
 // not apply themselves, per the task brief's decision that a click on the
 // primary button is the only thing that reinstalls the service.
 func (dp *daemonPage) refreshActionState() {
-	if dp.busy {
+	pending := daemonPending(dp.baseline, dp.readForm())
+
+	// The notice tracks the pending state itself, not the button's
+	// sensitivity: during a job the button goes insensitive while the
+	// changes are still unapplied, and telling the user they vanished
+	// would be worse than saying nothing.
+	dp.pendingLbl.SetText(daemonPendingNotice(pending))
+
+	switch {
+	case dp.busy:
 		dp.primaryBtn.SetSensitive(false)
-		return
-	}
-	if !dp.installed {
+	case !dp.installed:
 		dp.primaryBtn.SetSensitive(true)
-		return
+	default:
+		dp.primaryBtn.SetSensitive(pending)
 	}
-	dp.primaryBtn.SetSensitive(daemonPending(dp.baseline, dp.readForm()))
 }
 
 // confirmBridgeOn asks before turning the bridge switch ON — never before
@@ -470,7 +496,9 @@ func (dp *daemonPage) confirmBridgeOn() bool {
 //
 // serve.DockerBridgeAddr's error is not treated as a failure: a machine with
 // no docker0 interface (Docker never started, or not installed) is a normal
-// environment, not a bug — see daemonBridgeUnavailableTooltip.
+// environment, not a bug — see daemonBridgeUnavailableTooltip. It still
+// decides whether the switch is usable; what the daemon *listens on* is a
+// separate question, answered by probing (see listening below).
 func (dp *daemonPage) load() {
 	dp.runner.submit(func() func() {
 		active := serve.DaemonActive()
@@ -489,28 +517,33 @@ func (dp *daemonPage) load() {
 			}
 		}
 
-		bridgeAddr, bridgeErr := serve.DockerBridgeAddr()
+		// Only the error matters now: it decides whether the switch is
+		// usable. The address itself is no longer displayed — probing
+		// reports what is bound, and ListeningAddrs does its own lookup.
+		_, bridgeErr := serve.DockerBridgeAddr()
 
-		return func() { dp.applyLoad(active, installed, pf, bridgeAddr, bridgeErr) }
+		// Observed, not derived. This runs on the runner's worker
+		// goroutine, which is why a probe with I/O in it is fine here
+		// and would not be on the UI thread.
+		listening := serve.ListeningAddrs(pf.EffectiveLocalPort())
+
+		return func() { dp.applyLoad(active, installed, pf, bridgeErr, listening) }
 	})
 }
 
 // applyLoad renders a load() result onto the widgets. UI thread only, called
 // from a runner delivery.
-func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, bridgeAddr string, bridgeErr error) {
+func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, bridgeErr error, listening []string) {
 	port := pf.EffectiveLocalPort()
 	bridgeOn := pf.DockerBridge
 	bridgeAvailable := bridgeErr == nil
 
-	// Listen shows the bridge address only when it is both turned on AND
-	// actually reachable — a saved preference for a machine that no longer
-	// has Docker installed should not claim an address that is not really
-	// being listened on.
-	listenBridgeAddr := ""
-	if bridgeOn && bridgeAvailable {
-		listenBridgeAddr = bridgeAddr
-	}
-	sum := summarize(active, installed, port, listenBridgeAddr, pf.ActiveProfile)
+	// Listen renders the probe's result verbatim. It used to be assembled
+	// from pf.DockerBridge plus a live interface lookup, which describes
+	// the config rather than the process: a unit installed without
+	// --docker-bridge next to docker_bridge:true showed a bridge address
+	// nothing was bound to, and the inverse hid one that was.
+	sum := summarize(active, installed, listening, pf.ActiveProfile)
 	dp.stateLbl.SetText(sum.State)
 	dp.listenLbl.SetText(sum.Listen)
 	dp.profileLbl.SetText(sum.Profile)

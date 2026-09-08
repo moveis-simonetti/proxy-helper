@@ -7,6 +7,7 @@ package gui
 
 import (
 	"fmt"
+	"strings"
 
 	"proxy-helper/internal/serve"
 )
@@ -82,13 +83,20 @@ func formatStatus(status int, errText string) string {
 // daemonSummary is the service block's read-only text.
 type daemonSummary struct {
 	State   string // "Ativo" | "Parado" | "Não instalado"
-	Listen  string // "127.0.0.1:8888" (+ bridge address when enabled)
+	Listen  string // observed addresses, or "—" when bound to none
 	Profile string // active profile, or "nenhum"
 }
 
 // summarize formats the service block's read-only text from the daemon's
 // current state.
-func summarize(active, installed bool, port int, bridgeAddr string, activeProfile string) daemonSummary {
+//
+// listening is what serve.ListeningAddrs actually observed on the machine.
+// The configured port is deliberately not an argument: deriving this line
+// from config was the bug. A unit installed without --docker-bridge
+// alongside a config saying docker_bridge:true made this field advertise a
+// bridge address nothing was bound to, and a user hitting the opposite case
+// had no way to see it from here.
+func summarize(active, installed bool, listening []string, activeProfile string) daemonSummary {
 	state := "Não instalado"
 	switch {
 	case active:
@@ -97,9 +105,11 @@ func summarize(active, installed bool, port int, bridgeAddr string, activeProfil
 		state = "Parado"
 	}
 
-	listen := fmt.Sprintf("127.0.0.1:%d", port)
-	if bridgeAddr != "" {
-		listen += ", " + bridgeAddr
+	// Nothing answering is a real answer, and the honest one for a stopped
+	// or uninstalled service. State already says which of those it is.
+	listen := "—"
+	if len(listening) > 0 {
+		listen = strings.Join(listening, ", ")
 	}
 
 	profile := activeProfile
@@ -202,4 +212,19 @@ func daemonApplyMessage(wasInstalled bool, warning string) string {
 		msg += " — " + warning
 	}
 	return msg
+}
+
+// daemonPendingNotice is the line shown while the form holds changes that
+// were never sent to the system.
+//
+// The bridge switch and the port field change intent only; the primary
+// button applies them. That is the design, but the sole feedback used to be
+// that button quietly turning sensitive — and a user who turned the bridge
+// switch on, closed the window, and never pressed it reported the feature as
+// broken. Saying it in words, next to the control, is the fix.
+func daemonPendingNotice(pending bool) string {
+	if !pending {
+		return ""
+	}
+	return fmt.Sprintf("alterações não aplicadas — clique em %q", daemonPrimaryActionLabel(true))
 }

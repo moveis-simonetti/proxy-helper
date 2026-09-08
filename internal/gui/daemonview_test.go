@@ -151,7 +151,7 @@ func TestSummarizeStates(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := summarize(c.active, c.installed, 8888, "", "")
+			got := summarize(c.active, c.installed, nil, "")
 			if got.State != c.want {
 				t.Errorf("State = %q, want %q", got.State, c.want)
 			}
@@ -159,15 +159,30 @@ func TestSummarizeStates(t *testing.T) {
 	}
 }
 
-func TestSummarizeListen(t *testing.T) {
-	got := summarize(true, true, 8888, "", "")
+// Listen now renders what was *observed* on the machine, not what config
+// implies. The distinction is the whole point of the change: a saved
+// docker_bridge preference the running daemon never acted on used to show up
+// here as an address nothing was bound to.
+func TestSummarizeListenShowsObservedAddrs(t *testing.T) {
+	got := summarize(true, true, []string{"127.0.0.1:8888"}, "")
 	if got.Listen != "127.0.0.1:8888" {
-		t.Errorf("Listen (no bridge) = %q, want %q", got.Listen, "127.0.0.1:8888")
+		t.Errorf("Listen (loopback only) = %q, want %q", got.Listen, "127.0.0.1:8888")
 	}
 
-	got = summarize(true, true, 8888, "172.17.0.1:8888", "")
-	if got.Listen != "127.0.0.1:8888, 172.17.0.1:8888" {
-		t.Errorf("Listen (with bridge) = %q, want %q", got.Listen, "127.0.0.1:8888, 172.17.0.1:8888")
+	got = summarize(true, true, []string{"127.0.0.1:8888", "172.17.0.1:8888"}, "")
+	want := "127.0.0.1:8888, 172.17.0.1:8888"
+	if got.Listen != want {
+		t.Errorf("Listen (with bridge) = %q, want %q", got.Listen, want)
+	}
+}
+
+// A daemon that is installed but stopped is bound to nothing, and saying
+// "127.0.0.1:8888" there would be the same lie in the other direction. The
+// State label already carries "Parado"; Listen says there is no address.
+func TestSummarizeListenWhenNothingIsBound(t *testing.T) {
+	got := summarize(false, true, nil, "")
+	if got.Listen != "—" {
+		t.Errorf("Listen (stopped) = %q, want %q", got.Listen, "—")
 	}
 }
 
@@ -195,12 +210,12 @@ func TestDaemonPrimaryActionLabel(t *testing.T) {
 }
 
 func TestSummarizeProfile(t *testing.T) {
-	got := summarize(true, true, 8888, "", "")
+	got := summarize(true, true, nil, "")
 	if got.Profile != "nenhum" {
 		t.Errorf("Profile (empty) = %q, want %q", got.Profile, "nenhum")
 	}
 
-	got = summarize(true, true, 8888, "", "work")
+	got = summarize(true, true, nil, "work")
 	if got.Profile != "work" {
 		t.Errorf("Profile = %q, want %q", got.Profile, "work")
 	}
@@ -289,5 +304,26 @@ func TestDaemonApplyMessageWithoutWarningIsUnchanged(t *testing.T) {
 	}
 	if got := daemonApplyMessage(false, ""); got != "serviço instalado" {
 		t.Errorf("expected the first-install message, got: %q", got)
+	}
+}
+
+// The bug this covers: the bridge switch changes intent, not the system, and
+// the only signal that something was pending was the primary button turning
+// sensitive — quiet enough that a user turned the switch on, closed the
+// window, and reported the bridge as broken. The notice says it in words.
+func TestDaemonPendingNotice(t *testing.T) {
+	if got := daemonPendingNotice(false); got != "" {
+		t.Errorf("daemonPendingNotice(false) = %q, want empty", got)
+	}
+
+	got := daemonPendingNotice(true)
+	if got == "" {
+		t.Fatal("daemonPendingNotice(true) = empty, want a notice")
+	}
+	// Naming the button is what makes the notice actionable rather than
+	// just alarming, so it must stay in sync with daemonPrimaryActionLabel.
+	if !strings.Contains(got, daemonPrimaryActionLabel(true)) {
+		t.Errorf("daemonPendingNotice(true) = %q, want it to name %q",
+			got, daemonPrimaryActionLabel(true))
 	}
 }

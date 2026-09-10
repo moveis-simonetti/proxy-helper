@@ -14,7 +14,22 @@ func withFakeVscodeConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	// HOME too: snap installs ignore XDG_CONFIG_HOME and keep their config
+	// under ~/snap/<pkg>/current, so a test that only redirected the former
+	// would read the developer's real home.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", "")
+	return dir
+}
+
+// snapUserDir creates the confined config directory a snap-installed editor
+// uses: ~/snap/<pkg>/current/.config/<product>/User.
+func snapUserDir(t *testing.T, snapPkg, product string) string {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), "snap", snapPkg, "current", ".config", product, "User")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -116,5 +131,85 @@ func TestVscodeAbsentEditorStaysAbsent(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
 		t.Errorf("Set created %v in a machine with no editor", entries)
+	}
+}
+
+// A snap-installed VS Code keeps settings.json inside its confined home, so
+// the three $XDG_CONFIG_HOME paths find nothing and the editor reads as
+// absent — the second half of the same user report.
+func TestVscodeStatusFindsSnapInstall(t *testing.T) {
+	withFakeVscodeConfig(t)
+	snapUserDir(t, "code", "Code")
+
+	st, err := (&vscodeTarget{}).Status(&Executor{}, false)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Detail != "not set" {
+		t.Errorf("Detail = %q, want %q", st.Detail, "not set")
+	}
+}
+
+func TestVscodeSetWritesInsideSnapHome(t *testing.T) {
+	withFakeVscodeConfig(t)
+	dir := snapUserDir(t, "code", "Code")
+
+	cfg := Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"}
+	if err := (&vscodeTarget{}).Set(&Executor{}, cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("snap settings.json not written: %v", err)
+	}
+	if !strings.Contains(string(data), `"http.proxy": "http://127.0.0.1:8888"`) {
+		t.Errorf("http.proxy missing:\n%s", data)
+	}
+}
+
+// Both packagings side by side is a real state — a leftover .deb next to a
+// snap — and each has its own settings.json. Configuring only one leaves the
+// editor the user actually launches unproxied.
+func TestVscodeSetWritesBothPackagings(t *testing.T) {
+	home := withFakeVscodeConfig(t)
+	native := userDir(t, home, "Code")
+	snap := snapUserDir(t, "code", "Code")
+
+	cfg := Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"}
+	if err := (&vscodeTarget{}).Set(&Executor{}, cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	for _, dir := range []string{native, snap} {
+		if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
+			t.Errorf("settings.json missing in %s: %v", dir, err)
+		}
+	}
+
+	st, err := (&vscodeTarget{}).Status(&Executor{}, false)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	// Distinct labels, or the status line reads as one editor listed twice.
+	for _, want := range []string{"VS Code=", "VS Code (snap)="} {
+		if !strings.Contains(st.Detail, want) {
+			t.Errorf("Detail = %q, want it to mention %q", st.Detail, want)
+		}
+	}
+}
+
+// A snap CLI lives on /snap/bin. Detecting the editor by that binary and
+// then writing to ~/.config would put the proxy in a file the confined
+// editor cannot read, so the packaging has to steer the path.
+func TestSnapBinaryPath(t *testing.T) {
+	cases := map[string]bool{
+		"/snap/bin/code":      true,
+		"/usr/bin/code":       false,
+		"/usr/local/bin/code": false,
+		"":                    false,
+	}
+	for path, want := range cases {
+		if got := isSnapBinary(path); got != want {
+			t.Errorf("isSnapBinary(%q) = %v, want %v", path, got, want)
+		}
 	}
 }

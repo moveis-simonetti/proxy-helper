@@ -104,6 +104,12 @@ func SaveProfile(d Deps, ex *proxy.Executor, resolve func(existing map[string]pr
 		// use, so that case is already excluded by the second condition.
 		if !existed && pf.ActiveProfile == "" && namedProfiles(pf.Profiles) == 1 {
 			pf.ActiveProfile = name
+			pf.LastProfile = name
+			// Upstream, not auto: this preserves exactly what selecting a
+			// profile used to mean here. Probing is something the user opts
+			// into, via "proxy setup" or "proxy mode auto" — it is not a
+			// behaviour to inherit by saving a profile.
+			pf.Mode = string(proxy.ModeUpstream)
 		}
 
 		wasActive = pf.ActiveProfile == name

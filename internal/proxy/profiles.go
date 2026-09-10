@@ -23,9 +23,20 @@ const DefaultLocalPort = 8888
 
 // ProfileFile is the on-disk format for saved proxy profiles.
 type ProfileFile struct {
+	// Mode is what the daemon does with a request: "auto", "upstream" or
+	// "direct" (see mode.go). It is a string rather than a Mode so an
+	// unrecognised value round-trips into Normalize instead of failing the
+	// whole unmarshal. Read it through EffectiveMode, never directly.
+	Mode string `json:"mode,omitempty"`
+	// ActiveProfile is which profile is *selected*. Whether it is used is
+	// Mode's business — before that field existed this one answered both
+	// questions, which is what forced LastProfile.
 	ActiveProfile string   `json:"active_profile,omitempty"`
 	GlobalNoProxy []string `json:"global_no_proxy,omitempty"`
-	// LastProfile is what "proxy on" restores after "proxy off".
+	// LastProfile mirrors ActiveProfile. It is written but no longer read:
+	// a daemon built before Mode existed and still running after an upgrade
+	// falls back to it, so dropping it would strand that process routing
+	// direct. Normalize is what reads it, once, to migrate an old config.
 	LastProfile string `json:"last_profile,omitempty"`
 	// DockerBridge records that the daemon also listens on the Docker bridge,
 	// which is what lets build containers reach it. Off by default: it exposes
@@ -104,7 +115,9 @@ func LoadProfiles() (*ProfileFile, error) {
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return &ProfileFile{Profiles: map[string]Config{}}, nil
+		fresh := &ProfileFile{Profiles: map[string]Config{}}
+		fresh.Normalize()
+		return fresh, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
@@ -117,6 +130,9 @@ func LoadProfiles() (*ProfileFile, error) {
 	if pf.Profiles == nil {
 		pf.Profiles = map[string]Config{}
 	}
+	// Every read goes through the migration, so no caller has to know
+	// whether the file on disk predates the mode field.
+	pf.Normalize()
 	return &pf, nil
 }
 

@@ -23,14 +23,43 @@ func (t *vscodeTarget) Available() bool     { return true }
 type vscodeProduct struct {
 	dir  string // config dir name under $XDG_CONFIG_HOME/<dir>/User/settings.json
 	name string
+	cmd  string // CLI binary, used to spot an install that has no settings.json
 }
 
 // vscodeProducts lists the editors sharing VS Code's settings.json format.
-// Editors not installed (no settings.json yet) are silently skipped.
 var vscodeProducts = []vscodeProduct{
-	{"Code", "VS Code"},
-	{"Cursor", "Cursor"},
-	{"Antigravity", "Antigravity"},
+	{"Code", "VS Code", "code"},
+	{"Cursor", "Cursor", "cursor"},
+	{"Antigravity", "Antigravity", "antigravity"},
+}
+
+// installed reports whether the editor is on this machine, independently of
+// whether it has a settings.json.
+//
+// The file alone is not the question: these editors create settings.json
+// only once the user changes a setting, so a working install can go a long
+// time without one. Treating "no file" as "no editor" told users their
+// editor did not exist and, worse, made Set skip them silently — the proxy
+// was never written, however many times they applied it.
+//
+// Two signals, either sufficient: the CLI on PATH, or the User directory,
+// which the editor creates on first run. Neither is checked against the
+// other, so an install that has only one of them still counts.
+func (p vscodeProduct) installed() bool {
+	if commandExists(p.cmd) {
+		return true
+	}
+	path, err := vscodeSettingsPath(p.dir)
+	if err != nil {
+		return false
+	}
+	// Deliberately the User directory, not the product directory above it:
+	// the latter survives an uninstall as a leftover, and creating a
+	// settings.json inside a dead config tree helps nobody.
+	if _, err := os.Stat(filepath.Dir(path)); err == nil {
+		return true
+	}
+	return false
 }
 
 func vscodeSettingsPath(dir string) (string, error) {
@@ -84,10 +113,15 @@ func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
 			return err
 		}
 		raw, _, err := readSettings(path)
-		if os.IsNotExist(err) {
+		switch {
+		case os.IsNotExist(err) && !p.installed():
 			continue
-		}
-		if err != nil {
+		case os.IsNotExist(err):
+			// The editor is here, it just never wrote a settings.json.
+			// Start from an empty document; Executor.WriteFile creates
+			// the User directory when it is missing too.
+			raw = []byte("{}\n")
+		case err != nil:
 			return err
 		}
 
@@ -168,6 +202,8 @@ func (t *vscodeTarget) Status(ex *Executor, elevate bool) (Status, error) {
 		}
 		_, doc, err := readSettings(path)
 		if os.IsNotExist(err) {
+			// No file is not no editor — see vscodeProduct.installed.
+			found = found || p.installed()
 			continue
 		}
 		if err != nil {

@@ -1001,6 +1001,9 @@ func (pp *profilesPage) doRemove(name string) {
 			wasActive = pf.ActiveProfile == name
 			if wasActive {
 				pf.ActiveProfile = ""
+				// See cmd/proxy_profile.go: a forwarding mode with nothing
+				// selected is not a state the daemon can honour.
+				pf.Mode = string(proxy.ModeDirect)
 			}
 			if pf.LastProfile == name {
 				pf.LastProfile = ""

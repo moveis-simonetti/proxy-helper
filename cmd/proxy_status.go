@@ -29,11 +29,17 @@ var proxyStatusCmd = &cobra.Command{
 			return err
 		}
 		active := daemonActive()
+		// Keyed on the mode, not on whether a profile is selected: a
+		// selected profile with mode direct is the ordinary "off" state,
+		// and reporting it as proxying would be a lie.
+		mode := pf.EffectiveMode()
 		switch {
+		case active && !mode.Forwards():
+			fmt.Printf("daemon: active, mode %s (everything goes direct)\n\n", mode)
 		case active && pf.ActiveProfile == "":
 			fmt.Printf("daemon: active, no profile selected (everything goes direct)\n\n")
 		case active:
-			fmt.Printf("daemon: active (profile %q)\n\n", pf.ActiveProfile)
+			fmt.Printf("daemon: active, mode %s (profile %q)\n\n", mode, pf.ActiveProfile)
 		case pf.ViaLocal:
 			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run \"systemctl --user start %s\"\n\n",
 				pf.EffectiveLocalPort(), serve.UnitName)

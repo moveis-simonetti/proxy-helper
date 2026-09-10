@@ -142,38 +142,49 @@ func (pf *ProfileFile) Get(name string) (Config, bool) {
 	return cfg, ok
 }
 
-// Off clears the active profile, which makes the daemon route everything
-// direct. It remembers what was active so On can restore it. Calling Off
-// when already off keeps the remembered profile.
+// Off routes everything direct. It is a thin alias over SetMode(ModeDirect),
+// kept because "proxy off", the tray toggle and the header switch all speak
+// this vocabulary.
+//
+// Unlike the version this replaced, it leaves ActiveProfile alone: the
+// profile stays selected while traffic goes direct, so the selector keeps
+// showing it and On has nothing to guess.
 func (pf *ProfileFile) Off() {
 	if pf.ActiveProfile != "" {
+		// Still mirrored for a pre-Mode daemon that may still be running.
 		pf.LastProfile = pf.ActiveProfile
 	}
-	pf.ActiveProfile = ""
+	pf.Mode = string(ModeDirect)
 }
 
-// On activates name, or the last profile that was active when name is empty.
+// On resumes forwarding through name, or through whatever is already
+// selected when name is empty.
 func (pf *ProfileFile) On(name string) error {
+	if name == "" {
+		name = pf.ActiveProfile
+	}
 	if name == "" {
 		name = pf.LastProfile
 	}
 	if name == "" {
-		return fmt.Errorf("no previously active profile to restore; run \"proxy on <profile>\" (see \"proxy profile list\")")
+		return fmt.Errorf("no profile to activate; run \"proxy on <profile>\" (see \"proxy profile list\")")
 	}
-	if _, ok := pf.Profiles[name]; !ok {
-		return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
-	}
-	pf.ActiveProfile = name
-	return nil
+	return pf.SelectProfile(name)
 }
 
-// SetCurrent stores an ad-hoc config in the reserved profile and activates it.
+// SetCurrent stores an ad-hoc config in the reserved profile and selects it.
+//
+// It sets the mode too: without that, "proxy set --via-local" would leave
+// the config it just wrote selected but switched off, and the user would see
+// their apply succeed and nothing change.
 func (pf *ProfileFile) SetCurrent(cfg Config) {
 	if pf.Profiles == nil {
 		pf.Profiles = map[string]Config{}
 	}
 	pf.Profiles[CurrentProfileName] = cfg
 	pf.ActiveProfile = CurrentProfileName
+	pf.LastProfile = CurrentProfileName
+	pf.Mode = string(ModeAuto)
 }
 
 // Save writes the profiles config file, creating its parent directory if

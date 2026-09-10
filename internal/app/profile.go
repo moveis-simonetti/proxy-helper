@@ -54,14 +54,16 @@ func On(d Deps, ex *proxy.Executor, name string) (OnResult, error) {
 func Off(d Deps, ex *proxy.Executor) (OffResult, error) {
 	var res OffResult
 	err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
-		if pf.ActiveProfile == "" {
+		// Keyed on the mode, not on ActiveProfile: the profile stays
+		// selected while traffic goes direct, so an empty selection no
+		// longer means "already off" — and a config with a profile
+		// selected but mode direct is exactly the already-off case.
+		if pf.EffectiveMode() == proxy.ModeDirect {
 			res.AlreadyOff = true
 			return nil
 		}
-		// Off, not a bare assignment: it records the profile in
-		// last_profile so a later On has something to restore.
+		res.Previous = pf.ActiveProfile
 		pf.Off()
-		res.Previous = pf.LastProfile
 		return nil
 	})
 	if err != nil {
@@ -171,7 +173,9 @@ func Disable(d Deps, ex *proxy.Executor, name string, targetNames []string) (*Re
 	if err != nil {
 		return nil, err
 	}
-	if pf.ActiveProfile == "" {
+	// Both halves mean "nothing to disable": no profile selected, or one
+	// selected but already routing direct.
+	if pf.ActiveProfile == "" || !pf.EffectiveMode().Forwards() {
 		return nil, fmt.Errorf("no profile is currently enabled")
 	}
 	if name != "" && name != pf.ActiveProfile {

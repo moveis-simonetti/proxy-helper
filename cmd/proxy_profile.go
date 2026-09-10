@@ -172,6 +172,9 @@ var proxyProfileRemoveCmd = &cobra.Command{
 			wasActive = pf.ActiveProfile == name
 			if wasActive {
 				pf.ActiveProfile = ""
+				// A forwarding mode with nothing selected is a state the
+				// daemon cannot honour; drop to direct along with it.
+				pf.Mode = string(proxy.ModeDirect)
 			}
 			if pf.LastProfile == name {
 				pf.LastProfile = ""

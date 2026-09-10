@@ -79,11 +79,14 @@ func TestOffRemembersWhatItTurnedOff(t *testing.T) {
 	}
 
 	pf, _ := proxy.LoadProfiles()
-	if pf.ActiveProfile != "" {
-		t.Errorf("active_profile = %q, want empty", pf.ActiveProfile)
+	if pf.EffectiveMode() != proxy.ModeDirect {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeDirect)
 	}
-	// Off must remember the profile, or "proxy on" afterwards has nothing
-	// to restore.
+	// The profile stays selected: routing is the mode's job now, so there
+	// is nothing for a later "proxy on" to restore.
+	if pf.ActiveProfile != "corp" {
+		t.Errorf("active_profile = %q, want it still selected", pf.ActiveProfile)
+	}
 	if pf.LastProfile != "corp" {
 		t.Errorf("last_profile = %q, want %q", pf.LastProfile, "corp")
 	}
@@ -247,8 +250,13 @@ func TestDisableClearsTargetsAndThenTheState(t *testing.T) {
 	}
 
 	pf, _ := proxy.LoadProfiles()
-	if pf.ActiveProfile != "" {
-		t.Errorf("active_profile = %q, want empty", pf.ActiveProfile)
+	// The routing decision moved to mode; the selection deliberately
+	// survives so the profile stays visible while traffic goes direct.
+	if pf.EffectiveMode() != proxy.ModeDirect {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeDirect)
+	}
+	if pf.ActiveProfile != "corp" {
+		t.Errorf("active_profile = %q, want it still selected", pf.ActiveProfile)
 	}
 	if pf.LastProfile != "corp" {
 		t.Errorf("last_profile = %q, want %q", pf.LastProfile, "corp")

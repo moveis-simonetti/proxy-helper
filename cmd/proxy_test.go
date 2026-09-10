@@ -321,8 +321,13 @@ func TestProfileDisableRemembersTheProfile(t *testing.T) {
 	}
 
 	pf := h.profiles(t)
-	if pf.ActiveProfile != "" {
-		t.Errorf("ActiveProfile = %q, want empty", pf.ActiveProfile)
+	if pf.EffectiveMode() != proxy.ModeDirect {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeDirect)
+	}
+	// The selection survives the disable, which is what makes a bare
+	// "proxy on" afterwards unambiguous instead of a lookup in last_profile.
+	if pf.ActiveProfile != "work" {
+		t.Errorf("ActiveProfile = %q, want it still selected", pf.ActiveProfile)
 	}
 	if pf.LastProfile != "work" {
 		t.Errorf("LastProfile = %q, want work so that \"proxy on\" works", pf.LastProfile)

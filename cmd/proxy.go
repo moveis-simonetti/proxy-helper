@@ -35,6 +35,7 @@ func deps() app.Deps {
 		DaemonActive:   daemonActive,
 		ReloadDaemon:   reloadDaemon,
 		BridgeAddr:     bridgeAddr,
+		InstallDaemon:  installDaemon,
 		// Notify keeps warnings in their original position: printed at the
 		// moment they are raised, interleaved with the executor's own
 		// output and before the sudo prompt they warn about, rather than

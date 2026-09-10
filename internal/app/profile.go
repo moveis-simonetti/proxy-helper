@@ -78,6 +78,15 @@ func Off(d Deps, ex *proxy.Executor) (OffResult, error) {
 	return res, nil
 }
 
+// DisableResult is what Disable did. It mirrors EnableResult: Report is nil
+// when TargetsUntouched is true, because no target was touched.
+type DisableResult struct {
+	Report *Report
+	// TargetsUntouched is true when the targets already pointed at the local
+	// daemon, so switching off changed state only.
+	TargetsUntouched bool
+}
+
 // EnableResult is what Enable did. Report is nil when TargetsUntouched is
 // true, because no target was touched.
 type EnableResult struct {
@@ -165,31 +174,54 @@ func Enable(d Deps, ex *proxy.Executor, name string, targetNames []string, viaLo
 	return EnableResult{Report: rep}, nil
 }
 
-// Disable clears the active profile's settings from the targets and drops the
-// activation. name, when non-empty, must be the active profile: it is a guard
-// against disabling something other than what the user meant.
-func Disable(d Deps, ex *proxy.Executor, name string, targetNames []string) (*Report, error) {
+// Disable stops proxying through the active profile. name, when non-empty,
+// must be the active profile: it is a guard against disabling something
+// other than what the user meant.
+//
+// It has two routes, and which one runs depends on where the proxy actually
+// lives. With the targets pointing at the local daemon there is nothing in
+// them to clear — they name the daemon, not the upstream — so the whole job
+// is switching the daemon to direct: no target rewritten, no password asked,
+// instant. Without that plumbing the targets each hold the upstream, and the
+// only way to stop using it is to clear all of them.
+//
+// The plumbing itself is never undone here. Taking the targets off the
+// daemon is "proxy unset", which is the documented recovery path rather
+// than a daily action.
+func Disable(d Deps, ex *proxy.Executor, name string, targetNames []string) (DisableResult, error) {
+	var res DisableResult
 	pf, err := proxy.LoadProfiles()
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	// Both halves mean "nothing to disable": no profile selected, or one
 	// selected but already routing direct.
 	if pf.ActiveProfile == "" || !pf.EffectiveMode().Forwards() {
-		return nil, fmt.Errorf("no profile is currently enabled")
+		return res, fmt.Errorf("no profile is currently enabled")
 	}
 	if name != "" && name != pf.ActiveProfile {
-		return nil, fmt.Errorf("profile %q is not the active one (active: %q)", name, pf.ActiveProfile)
+		return res, fmt.Errorf("profile %q is not the active one (active: %q)", name, pf.ActiveProfile)
+	}
+
+	// The cheap route: the targets name the daemon, not the upstream, so
+	// there is nothing in them to clear.
+	if pf.ViaLocal {
+		if _, err := SetMode(d, ex, proxy.ModeDirect); err != nil {
+			return res, err
+		}
+		res.TargetsUntouched = true
+		return res, nil
 	}
 
 	// Clear runs, and finishes, before the lock below is taken: it may take
 	// the profile lock itself, and flock does not nest within a process.
 	rep, err := Clear(d, ex, targetNames)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
+	res.Report = rep
 	if ex.DryRun {
-		return rep, nil
+		return res, nil
 	}
 	// A target that failed to drop the proxy is still holding it. Dropping
 	// active_profile anyway would tell the user the profile is off while a
@@ -197,7 +229,7 @@ func Disable(d Deps, ex *proxy.Executor, name string, targetNames []string) (*Re
 	// tool exists to prevent. The state only falls once every target really
 	// let go.
 	if rep.Err() != nil {
-		return rep, nil
+		return res, nil
 	}
 
 	if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
@@ -206,10 +238,10 @@ func Disable(d Deps, ex *proxy.Executor, name string, targetNames []string) (*Re
 		lpf.Off()
 		return nil
 	}); err != nil {
-		return nil, err
+		return res, err
 	}
 	if err := d.ReloadDaemon(ex); err != nil {
-		return nil, err
+		return res, err
 	}
-	return rep, nil
+	return res, nil
 }

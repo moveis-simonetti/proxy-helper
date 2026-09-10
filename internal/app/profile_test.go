@@ -238,11 +238,11 @@ func TestDisableClearsTargetsAndThenTheState(t *testing.T) {
 	d := depsFor(tg)
 	d.ReloadDaemon = func(*proxy.Executor) error { return nil }
 
-	rep, err := Disable(d, &proxy.Executor{}, "corp", []string{"all"})
+	res, err := Disable(d, &proxy.Executor{}, "corp", []string{"all"})
 	if err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	if rep == nil {
+	if res.Report == nil {
 		t.Fatal("Report is nil")
 	}
 	if tg.unsets != 1 {

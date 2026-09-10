@@ -66,6 +66,22 @@ var proxyServeCmd = &cobra.Command{
 			ReadHeaderTimeout: 20 * time.Second,
 		}
 
+		// The published runtime state is how anything outside this process
+		// learns what the daemon is really doing: in mode auto that answer
+		// depends on a probe verdict held only here, so config.json alone
+		// cannot supply it.
+		state.SetPort(servePort)
+		if err := state.PublishRuntimeState(); err != nil {
+			logger.Warn("runtime_state_write_failed", "error", err.Error())
+		}
+		defer func() { _ = serve.ClearRuntimeState() }()
+
+		// The prober keeps mode auto's verdict current. It is idle in the
+		// other modes, and Reload wakes it when the upstream changes.
+		probeCtx, stopProbe := context.WithCancel(context.Background())
+		defer stopProbe()
+		go state.Watch(probeCtx, serve.WatchOptions{})
+
 		hup := make(chan os.Signal, 1)
 		signal.Notify(hup, syscall.SIGHUP)
 		go func() {

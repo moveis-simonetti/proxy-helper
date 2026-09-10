@@ -28,12 +28,28 @@ var proxyStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Checked before the unit state, and by probing rather than asking
+		// systemd: "active" means the process exists, not that it managed
+		// to bind. A daemon that lost its port is active and useless, and
+		// with every target pointing at it that is a machine with no
+		// network — the one thing worth saying before anything else.
+		health := app.CheckDaemon(pf, serve.ListeningAddrs)
+		if health.Stranded() {
+			renderNotice(stdout(), app.Notice{
+				Kind: app.NoticeDaemonStranded,
+				Args: map[string]string{"port": fmt.Sprint(health.Port)},
+			})
+			fmt.Println()
+		}
+
 		active := daemonActive()
 		// Keyed on the mode, not on whether a profile is selected: a
 		// selected profile with mode direct is the ordinary "off" state,
 		// and reporting it as proxying would be a lie.
 		mode := pf.EffectiveMode()
 		switch {
+		case health.Stranded():
+			fmt.Printf("daemon: NOT LISTENING on 127.0.0.1:%d\n\n", health.Port)
 		case active && !mode.Forwards():
 			fmt.Printf("daemon: active, mode %s (everything goes direct)\n\n", mode)
 		case active && pf.ActiveProfile == "":
@@ -42,7 +58,7 @@ var proxyStatusCmd = &cobra.Command{
 			fmt.Printf("daemon: active, mode %s (profile %q)\n\n", mode, pf.ActiveProfile)
 		case pf.ViaLocal:
 			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run \"systemctl --user start %s\"\n\n",
-				pf.EffectiveLocalPort(), serve.UnitName)
+				health.Port, serve.UnitName)
 		default:
 			fmt.Printf("daemon: not in use\n\n")
 		}

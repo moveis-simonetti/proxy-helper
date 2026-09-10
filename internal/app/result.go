@@ -65,6 +65,10 @@ const (
 	// and needs no restart. Notice.Args carries "op": "apply" or "clear",
 	// since the two operations word the warning differently.
 	NoticeDockerNeedsRestart
+	// NoticeDaemonStranded warns that the targets point at a local daemon
+	// that is not answering, which leaves the machine with no network at
+	// all. Args carry "port".
+	NoticeDaemonStranded
 
 	// NumNoticeKinds is the number of NoticeKind values defined above. Kept
 	// right next to the iota block so it tracks it automatically; a

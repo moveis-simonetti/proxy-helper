@@ -29,6 +29,7 @@ import (
 
 	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
+	"proxy-helper/internal/serve"
 
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -66,13 +67,15 @@ type tray struct {
 	win *window
 	r   *runner
 
-	toggleItem  *gtk.MenuItem
+	modeItem    *gtk.MenuItem
+	modeMenu    *gtk.Menu
 	profileItem *gtk.MenuItem
 	profileMenu *gtk.Menu
 
-	// active mirrors config.json's "there is an active profile" fact, as
-	// of the last refresh() delivery. It is only ever read/written on the
-	// GTK thread (toggleItem's handler reads it when queuing a job;
+	// active mirrors whether the daemon is really forwarding, as of the
+	// last refresh() delivery — the mode AND, in auto, the probe verdict.
+	// It drives the icon only. Read/written on the
+	// GTK thread (the menu handlers read it when queuing a job;
 	// applyProfiles, itself always a runner delivery, writes it), so it
 	// needs no lock despite being read from inside a submitted job's
 	// closure-capture.
@@ -133,13 +136,22 @@ func newTray(win *window, r *runner, closeToTray bool) (*tray, error) {
 
 	t := &tray{indicator: indicator, menu: menu, win: win, r: r}
 
-	toggleItem, err := gtk.MenuItemNewWithLabel("Ativar proxy")
+	// A submenu, not a toggle: there are three modes now, and a single
+	// "Ativar/Desativar" item could only ever express two of them. Same
+	// RadioMenuItem shape as the profile submenu below, for the same
+	// reason — they are a mutually-exclusive choice.
+	modeItem, err := gtk.MenuItemNewWithLabel("Modo")
 	if err != nil {
 		return nil, err
 	}
-	toggleItem.Connect("activate", func() { t.tryToggle() })
-	menu.Append(toggleItem)
-	t.toggleItem = toggleItem
+	modeMenu, err := gtk.MenuNew()
+	if err != nil {
+		return nil, err
+	}
+	modeItem.SetSubmenu(modeMenu)
+	menu.Append(modeItem)
+	t.modeItem = modeItem
+	t.modeMenu = modeMenu
 
 	profileItem, err := gtk.MenuItemNewWithLabel("Perfil")
 	if err != nil {
@@ -317,22 +329,21 @@ func (t *tray) refresh() {
 func (t *tray) applyProfiles(pf *proxy.ProfileFile, err error) {
 	if err != nil {
 		t.active = false
-		t.toggleItem.SetLabel("Ativar proxy")
-		t.toggleItem.SetSensitive(false)
+		t.modeItem.SetSensitive(false)
 		t.setIcon(false)
 		t.rebuildProfileMenu(nil, "")
 		return
 	}
 
-	t.toggleItem.SetSensitive(true)
-	t.active = pf.ActiveProfile != ""
-	if t.active {
-		t.toggleItem.SetLabel("Desativar proxy")
-	} else {
-		t.toggleItem.SetLabel("Ativar proxy")
-	}
+	t.modeItem.SetSensitive(true)
+	mode := pf.EffectiveMode()
+	// The daemon's own verdict, for the same reason the header uses it:
+	// in auto, "is it forwarding" is not answerable from config alone.
+	rs, _ := serve.ReadRuntimeState()
+	t.active = mode.Forwards() && (mode != proxy.ModeAuto || rs.UpstreamReachable)
 	t.setIcon(t.active)
 
+	t.rebuildModeMenu(mode)
 	t.rebuildProfileMenu(visibleProfiles(pf), pf.ActiveProfile)
 }
 
@@ -378,23 +389,13 @@ func (t *tray) rebuildProfileMenu(names []string, active string) {
 // headerbar master switch (see headerbarCtl.trySetMaster): it is pure
 // state plus a daemon reload, never a target, so EscalateNone is safe and
 // no confirmation is needed.
-func (t *tray) tryToggle() {
-	wasActive := t.active
+func (t *tray) trySetMode(m proxy.Mode) {
 	t.r.submit(func() func() {
 		ex := &proxy.Executor{Escalation: proxy.EscalateNone}
-		var err error
-		if wasActive {
-			_, err = app.Off(statusDeps(), ex)
-		} else {
-			_, err = app.On(statusDeps(), ex, "")
-		}
+		_, err := app.SetMode(statusDeps(), ex, m)
 		return func() {
 			if err != nil {
-				verb := "ativar"
-				if wasActive {
-					verb = "desativar"
-				}
-				t.showError(fmt.Sprintf("erro ao %s proxy: %s", verb, err))
+				t.showError(fmt.Sprintf("erro ao trocar o modo: %s", err))
 				return
 			}
 			if t.onChanged != nil {
@@ -402,6 +403,48 @@ func (t *tray) tryToggle() {
 			}
 		}
 	})
+}
+
+// rebuildModeMenu repopulates the "Modo" submenu, marking the active mode.
+// Same destroy-and-recreate shape as rebuildProfileMenu — see its comment
+// for why that is cheap enough and why RadioMenuItem is the right widget.
+func (t *tray) rebuildModeMenu(active proxy.Mode) {
+	t.modeMenu.GetChildren().Foreach(func(item interface{}) {
+		if w, ok := item.(*gtk.Widget); ok {
+			t.modeMenu.Remove(w)
+		}
+	})
+
+	var group *gtk.RadioMenuItem
+	for _, m := range []struct {
+		mode  proxy.Mode
+		label string
+	}{
+		{proxy.ModeAuto, "Automático"},
+		{proxy.ModeUpstream, "Sempre pelo proxy"},
+		{proxy.ModeDirect, "Direto"},
+	} {
+		item, err := gtk.RadioMenuItemNewWithLabelFromWidget(group, m.label)
+		if err != nil {
+			continue
+		}
+		group = item
+		if m.mode == active {
+			item.SetActive(true)
+		}
+		mode := m.mode
+		item.Connect("activate", func() {
+			// Activating the already-active item is GTK reasserting the
+			// radio state, not a user choice; acting on it would SIGHUP
+			// the daemon on every menu rebuild.
+			if mode == active {
+				return
+			}
+			t.trySetMode(mode)
+		})
+		t.modeMenu.Append(item)
+	}
+	t.modeMenu.ShowAll()
 }
 
 // trySwitch is the tray menu's entry point for picking a profile. It

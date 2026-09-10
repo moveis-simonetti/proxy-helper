@@ -71,6 +71,14 @@ type statusPage struct {
 	// elevationBar tells the user some target could not be read without
 	// sudo and offers the one button that does that read. Hidden by
 	// default (SetNoShowAll); see applyStatuses.
+	// strandedBar is the one warning that outranks everything else on this
+	// page: the targets point at a daemon that is not answering, so the
+	// machine has no network at all. It is MESSAGE_ERROR, not WARNING —
+	// the elevation bar means "I could not read something", this means
+	// "nothing works".
+	strandedBar *gtk.InfoBar
+	strandedLbl *gtk.Label
+
 	elevationBar     *gtk.InfoBar
 	elevationLbl     *gtk.Label
 	elevationSudoBtn *gtk.Button
@@ -164,6 +172,14 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 
 		sp.rows = append(sp.rows, row)
 	}
+
+	strandedBar, strandedLbl, err := newStrandedBar()
+	if err != nil {
+		return nil, err
+	}
+	win.StatusPage.PackStart(strandedBar, false, false, 0)
+	sp.strandedBar = strandedBar
+	sp.strandedLbl = strandedLbl
 
 	elevationBar, elevationLbl, elevationSudoBtn, err := newElevationBar(func() { sp.reloadWithSudo() })
 	if err != nil {
@@ -461,11 +477,17 @@ func (sp *statusPage) load() {
 		// to prevent. A LoadProfiles failure is not worth failing the whole
 		// read over; the checkbox just keeps its previous position.
 		viaLocal := false
+		var health app.DaemonHealth
 		if pf, pfErr := proxy.LoadProfiles(); pfErr == nil {
 			viaLocal = pf.ViaLocal
+			// Probed here, inside the runner job: ListeningAddrs dials, and
+			// on a loaded machine that can cost a few hundred milliseconds
+			// — never on the GTK thread.
+			health = app.CheckDaemon(pf, serve.ListeningAddrs)
 		}
 		return func() {
 			sp.applyViaLocal(viaLocal)
+			sp.setStrandedVisible(health)
 			sp.applyStatuses(sts, err)
 		}
 	})
@@ -565,6 +587,48 @@ func (sp *statusPage) setElevationBarVisible(n int) {
 	sp.elevationSudoBtn.SetVisible(true)
 	sp.elevationBar.ShowAll()
 	sp.elevationBar.SetVisible(true)
+}
+
+// newStrandedBar builds the bar shown when the daemon the targets point at
+// is not answering. Same SetNoShowAll dance as newElevationBar — see
+// setElevationBarVisible for why the label has to be shown explicitly.
+func newStrandedBar() (*gtk.InfoBar, *gtk.Label, error) {
+	bar, err := gtk.InfoBarNew()
+	if err != nil {
+		return nil, nil, err
+	}
+	bar.SetMessageType(gtk.MESSAGE_ERROR)
+	bar.SetNoShowAll(true)
+	bar.SetVisible(false)
+
+	content, err := bar.GetContentArea()
+	if err != nil {
+		return nil, nil, err
+	}
+	lbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, nil, err
+	}
+	lbl.SetXAlign(0)
+	lbl.SetLineWrap(true)
+	content.PackStart(lbl, true, true, 0)
+	return bar, lbl, nil
+}
+
+// setStrandedVisible shows or hides the no-daemon warning. Like the
+// elevation bar, the label must be shown explicitly every time.
+func (sp *statusPage) setStrandedVisible(h app.DaemonHealth) {
+	if !h.Stranded() {
+		sp.strandedBar.SetVisible(false)
+		return
+	}
+	sp.strandedLbl.SetText(noticeText(app.Notice{
+		Kind: app.NoticeDaemonStranded,
+		Args: map[string]string{"port": fmt.Sprint(h.Port)},
+	}))
+	sp.strandedLbl.SetVisible(true)
+	sp.strandedBar.ShowAll()
+	sp.strandedBar.SetVisible(true)
 }
 
 // newElevationBar builds the bar shown above the target table when

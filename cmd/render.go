@@ -51,6 +51,11 @@ func renderNotice(w io.Writer, n app.Notice) {
 		} else {
 			fmt.Fprintln(w, "  note: run \"sudo systemctl restart docker\" to apply")
 		}
+	case app.NoticeDaemonStranded:
+		fmt.Fprintf(w, "  WARNING: every target points at 127.0.0.1:%s, but nothing is listening there.\n", n.Args["port"])
+		fmt.Fprintln(w, "           Until the daemon is back, this machine has no network access at all.")
+		fmt.Fprintln(w, "           Restart it:  systemctl --user restart proxy-helper.service")
+		fmt.Fprintln(w, "           Or take the targets off it:  proxy-helper proxy unset --targets all")
 	case app.NoticeNeedsSudo:
 		fmt.Fprintf(w, "  note: %s needs sudo, you may be prompted for your password\n", n.Target)
 	case app.NoticeProfileAlreadyPlumbed:

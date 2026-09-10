@@ -273,12 +273,20 @@ var proxyProfileDisableCmd = &cobra.Command{
 			name = args[0]
 		}
 		ex := &proxy.Executor{DryRun: profileDisableDryRun}
-		rep, err := app.Disable(deps(), ex, name, profileDisableTargets)
+		res, err := app.Disable(deps(), ex, name, profileDisableTargets)
 		if err != nil {
 			return err
 		}
-		renderReport(stdout(), rep)
-		return rep.Err()
+		if res.Report != nil {
+			renderReport(stdout(), res.Report)
+		}
+		if res.TargetsUntouched {
+			// Mirrors the enable side: nothing was written, so a result
+			// table would be an empty header. Say what happened instead.
+			fmt.Println("routing direct; no target was touched")
+			return nil
+		}
+		return res.Report.Err()
 	},
 }
 

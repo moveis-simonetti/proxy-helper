@@ -29,6 +29,10 @@ type State struct {
 	// and a non-blocking send: a pending wake-up is as good as two, and
 	// Reload must never block on a prober that is mid-dial.
 	kick chan struct{}
+
+	// port is only carried so the published runtime state can name it; the
+	// daemon, not State, decides where to listen.
+	port atomic.Int64
 }
 
 type snapshot struct {
@@ -97,8 +101,21 @@ func (s *State) Reachable() bool { return s.reachable.Load() }
 // it, never a request.
 func (s *State) setReachable(up bool) { s.reachable.Store(up) }
 
+// SetPort records the port the daemon listens on, for the published runtime
+// state. Call it before the first publish.
+func (s *State) SetPort(p int) { s.port.Store(int64(p)) }
+
 // Describe renders the mode, active profile and upstream for status output.
 func (s *State) Describe() string { return s.current.Load().summary }
+
+// publish refreshes the runtime state file, logging rather than failing:
+// nobody outside can read the state, but the proxy itself still works, and
+// taking the daemon down over a status file would be the wrong trade.
+func (s *State) publish() {
+	if err := s.PublishRuntimeState(); err != nil {
+		s.logger.Warn("runtime_state_write_failed", slog.String("error", err.Error()))
+	}
+}
 
 // Reload re-reads the config and swaps the state. On error the previous
 // state is kept: a SIGHUP with broken JSON must never take the proxy down.
@@ -122,6 +139,7 @@ func (s *State) Reload() error {
 		slog.String("to", snap.profile),
 		slog.String("mode", string(snap.mode)),
 		slog.String("upstream", snap.summary))
+	s.publish()
 	return nil
 }
 

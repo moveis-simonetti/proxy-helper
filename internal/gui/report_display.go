@@ -105,6 +105,13 @@ func noticeText(n app.Notice) string {
 		}
 		return "O Docker precisa ser reiniciado para a mudança valer. " +
 			"Os containers em execução serão reiniciados."
+	case app.NoticeDaemonStranded:
+		return fmt.Sprintf(
+			"Todos os alvos apontam para 127.0.0.1:%s, mas não há nada escutando lá. "+
+				"Enquanto o daemon não voltar, esta máquina fica sem acesso à rede. "+
+				"Reinicie o serviço na aba Daemon, ou remova os alvos com "+
+				"\"proxy unset --targets all\".",
+			n.Args["port"])
 	default:
 		return fmt.Sprintf("aviso desconhecido para %s", n.Target)
 	}

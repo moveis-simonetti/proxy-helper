@@ -22,6 +22,9 @@ type Deps struct {
 	DaemonActive   func() bool
 	ReloadDaemon   func(*proxy.Executor) error
 	BridgeAddr     func() (string, error)
+	// InstallDaemon writes and starts the user unit. Only Setup needs it,
+	// so callers that never run Setup may leave it nil.
+	InstallDaemon func(*proxy.Executor) error
 	// Notify, when set, receives each Notice as it is raised rather than only
 	// at the end. The CLI uses it to keep warnings in their original
 	// position: interleaved with the executor's own output, and before the

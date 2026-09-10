@@ -80,7 +80,10 @@ func (t *systemEnvTarget) Set(ex *Executor, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return ex.WritePrivilegedFile(etcEnvironmentPath, content, 0o644)
+	// Preview the block, not the merged file: /etc/environment is shared
+	// with whatever else the machine keeps there, and a dry-run has no
+	// business printing it.
+	return ex.WritePrivilegedFilePreview(etcEnvironmentPath, content, body, 0o644)
 }
 
 func (t *systemEnvTarget) Unset(ex *Executor) error {
@@ -91,7 +94,8 @@ func (t *systemEnvTarget) Unset(ex *Executor) error {
 	if !found {
 		return nil
 	}
-	return ex.WritePrivilegedFile(etcEnvironmentPath, content, 0o644)
+	return ex.WritePrivilegedFilePreview(etcEnvironmentPath, content,
+		"(removing the proxy-helper managed block)", 0o644)
 }
 
 func (t *systemEnvTarget) Status(ex *Executor, elevate bool) (Status, error) {

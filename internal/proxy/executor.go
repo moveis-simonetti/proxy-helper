@@ -119,16 +119,29 @@ func indent(s string) string {
 }
 
 // redactSecrets masks credentials in text that's about to be printed for a
-// dry-run preview: userinfo embedded in URLs (proxy://user:pass@host) and
-// JSON fields that hold tokens/passwords (docker's "auth", "identitytoken", ...).
+// dry-run preview: userinfo embedded in URLs (proxy://user:pass@host), JSON
+// fields that hold tokens/passwords (docker's "auth", "identitytoken", ...)
+// and key=value assignments whose key names a secret.
+//
+// The third pattern is defence in depth rather than the main protection.
+// The real fix for previews is upstream of here — a preview shows what
+// CHANGES, not the whole file it changes (see WriteFilePreview) — but a
+// target that legitimately echoes a file it owns can still have picked up a
+// token that wandered in, and neither of the first two patterns matches an
+// npmrc line or a shell-style assignment.
 var (
 	urlUserinfoRe = regexp.MustCompile(`://[^/@\s"]+:[^/@\s"]+@`)
 	jsonSecretRe  = regexp.MustCompile(`(?i)("(?:auth|identitytoken|password|authentication-password)"\s*:\s*")[^"]*(")`)
+	// The key must NAME a secret to match. Deliberately not "key" on its
+	// own, which would catch SSH_KEY_PATH and friends, and deliberately
+	// "_auth" with the underscore so an AUTHOR= line survives.
+	secretAssignRe = regexp.MustCompile(`(?im)^([^\s=]*(?:_auth|token|secret|passwd|password|credential|api[-_]?key)[^\s=]*\s*=\s*)\S.*$`)
 )
 
 func redactSecrets(s string) string {
 	s = urlUserinfoRe.ReplaceAllString(s, "://***:***@")
 	s = jsonSecretRe.ReplaceAllString(s, "${1}***REDACTED***${2}")
+	s = secretAssignRe.ReplaceAllString(s, "${1}***REDACTED***")
 	return s
 }
 
@@ -245,6 +258,23 @@ func (e *Executor) WriteFilePreview(path string, content []byte, preview string,
 }
 
 // WritePrivilegedFile writes content to a root-owned path via sudo tee.
+// WritePrivilegedFilePreview is WritePrivilegedFile whose dry-run shows only
+// preview instead of the whole file — the privileged twin of
+// WriteFilePreview, and for the same reason: echoing a merged file leaks
+// whatever else the user keeps in it.
+func (e *Executor) WritePrivilegedFilePreview(path string, content []byte, preview string, perm os.FileMode) error {
+	if e.DryRun {
+		via := e.Escalation.name()
+		if via == "" {
+			return fmt.Errorf("writing %s requires root, but elevation is disabled", path)
+		}
+		fmt.Fprintf(e.out(), "  [dry-run] would update (%s) %s, changing only this block:\n%s\n",
+			via, path, indent(redactSecrets(preview)))
+		return nil
+	}
+	return e.WritePrivilegedFile(path, content, perm)
+}
+
 func (e *Executor) WritePrivilegedFile(path string, content []byte, perm os.FileMode) error {
 	via := e.Escalation.name()
 	if e.DryRun {

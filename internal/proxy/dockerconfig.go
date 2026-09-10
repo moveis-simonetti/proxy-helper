@@ -74,7 +74,14 @@ func (t *dockerConfigTarget) Set(ex *Executor, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return ex.WriteFile(path, append(out, '\n'), 0o644)
+	// Preview only the block being written. config.json holds registry
+	// credentials; jsonSecretRe masks the ones it recognises, but not
+	// echoing them at all is the stronger guarantee.
+	preview, err := json.MarshalIndent(map[string]interface{}{"proxies": doc["proxies"]}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return ex.WriteFilePreview(path, append(out, '\n'), string(preview), 0o644)
 }
 
 func (t *dockerConfigTarget) Unset(ex *Executor) error {

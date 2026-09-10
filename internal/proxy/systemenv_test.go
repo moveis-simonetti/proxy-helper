@@ -73,25 +73,33 @@ func TestSystemEnvRenderOmitsNoProxyWhenEmpty(t *testing.T) {
 
 // The file already carries PATH and often more; the target owns only its
 // marked block and must leave every other line untouched.
+//
+// Asserted on the merged bytes rather than on the dry-run preview: the
+// preview deliberately shows only the block now (see
+// TestSystemEnvDryRunShowsOnlyItsBlock), so it is no longer a window onto
+// what the whole file will become.
 func TestSystemEnvSetPreservesExistingLines(t *testing.T) {
 	withFakeEtcEnvironment(t, "PATH=\"/usr/local/sbin:/usr/bin\"\nLANG=en_US.UTF-8\n")
 
-	var out bytes.Buffer
-	ex := &Executor{DryRun: true, Out: &out}
-	cfg := Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"}
-	if err := NewSystemEnvTarget().Set(ex, cfg); err != nil {
-		t.Fatalf("Set: %v", err)
+	body, err := renderSystemEnvBlock(Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	merged, err := upsertBlock(etcEnvironmentPath, body)
+	if err != nil {
+		t.Fatalf("upsertBlock: %v", err)
 	}
 
-	preview := out.String()
+	got := string(merged)
 	for _, want := range []string{
 		`PATH="/usr/local/sbin:/usr/bin"`,
 		"LANG=en_US.UTF-8",
 		"HTTP_PROXY=http://127.0.0.1:8888",
 		blockBegin,
+		blockEnd,
 	} {
-		if !strings.Contains(preview, want) {
-			t.Errorf("dry-run preview missing %q:\n%s", want, preview)
+		if !strings.Contains(got, want) {
+			t.Errorf("merged file missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -101,23 +109,23 @@ func TestSystemEnvUnsetRemovesOnlyTheBlock(t *testing.T) {
 	initial := "PATH=/usr/bin\n\n" + blockBegin + "\n" + strings.TrimRight(body, "\n") + "\n" + blockEnd + "\n"
 	withFakeEtcEnvironment(t, initial)
 
-	var out bytes.Buffer
-	ex := &Executor{DryRun: true, Out: &out}
-	if err := NewSystemEnvTarget().Unset(ex); err != nil {
-		t.Fatalf("Unset: %v", err)
+	merged, found, err := removeBlock(etcEnvironmentPath)
+	if err != nil {
+		t.Fatalf("removeBlock: %v", err)
+	}
+	if !found {
+		t.Fatal("removeBlock did not find the block")
 	}
 
-	preview := out.String()
-	if !strings.Contains(preview, "PATH=/usr/bin") {
-		t.Errorf("Unset dropped an unmanaged line:\n%s", preview)
+	got := string(merged)
+	if !strings.Contains(got, "PATH=/usr/bin") {
+		t.Errorf("unset dropped an unmanaged line:\n%s", got)
 	}
-	if strings.Contains(preview, "HTTP_PROXY=") {
-		t.Errorf("Unset left the proxy block behind:\n%s", preview)
+	if strings.Contains(got, "HTTP_PROXY=") {
+		t.Errorf("unset left the proxy block behind:\n%s", got)
 	}
 }
 
-// Unsetting a file that never had the block is a no-op, like every other
-// target — no write, no error.
 func TestSystemEnvUnsetIsNoOpWithoutBlock(t *testing.T) {
 	withFakeEtcEnvironment(t, "PATH=/usr/bin\n")
 

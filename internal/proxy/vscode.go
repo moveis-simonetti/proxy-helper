@@ -283,6 +283,11 @@ func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
 			{"http.proxy", proxyURL},
 			{"http.proxyStrictSSL", false},
 		}
+		// preview accumulates just the keys being written. settings.json is
+		// the user's, and extensions keep API keys in it — echoing the
+		// merged file would print them for anyone who merely asked what the
+		// command would do.
+		var preview []string
 		for _, kv := range values {
 			encoded, err := encodeJSON(kv.val)
 			if err != nil {
@@ -291,6 +296,7 @@ func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
 			if raw, err = setJSONCKey(raw, kv.key, encoded); err != nil {
 				return fmt.Errorf("%s: %w", inst.name, err)
 			}
+			preview = append(preview, fmt.Sprintf("%q: %s", kv.key, encoded))
 		}
 		if len(cfg.NoProxy) > 0 {
 			encoded, err := encodeJSON(cfg.NoProxy)
@@ -300,11 +306,12 @@ func (t *vscodeTarget) Set(ex *Executor, cfg Config) error {
 			if raw, err = setJSONCKey(raw, "http.noProxy", encoded); err != nil {
 				return fmt.Errorf("%s: %w", inst.name, err)
 			}
+			preview = append(preview, fmt.Sprintf("%q: %s", "http.noProxy", encoded))
 		} else if raw, err = removeJSONCKeys(raw, "http.noProxy"); err != nil {
 			return fmt.Errorf("%s: %w", inst.name, err)
 		}
 
-		if err := ex.WriteFile(inst.path, raw, 0o644); err != nil {
+		if err := ex.WriteFilePreview(inst.path, raw, strings.Join(preview, "\n"), 0o644); err != nil {
 			return fmt.Errorf("%s: %w", inst.name, err)
 		}
 	}
@@ -328,7 +335,8 @@ func (t *vscodeTarget) Unset(ex *Executor) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", inst.name, err)
 		}
-		if err := ex.WriteFile(inst.path, raw, 0o644); err != nil {
+		if err := ex.WriteFilePreview(inst.path, raw,
+			"(removing http.proxy, http.proxyStrictSSL, http.noProxy)", 0o644); err != nil {
 			return fmt.Errorf("%s: %w", inst.name, err)
 		}
 	}

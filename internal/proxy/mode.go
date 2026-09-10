@@ -41,6 +41,10 @@ func validMode(s string) bool {
 	return false
 }
 
+// ValidMode is validMode for callers outside this package, so nobody has to
+// keep a second copy of the list of modes.
+func ValidMode(m Mode) bool { return validMode(string(m)) }
+
 // ParseMode converts user input into a Mode, listing the alternatives when
 // it cannot.
 func ParseMode(s string) (Mode, error) {

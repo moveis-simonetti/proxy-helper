@@ -60,6 +60,8 @@ separada por vírgula (ou `all`, o padrão):
 - `shell` — `~/.bashrc` / `~/.zshrc`
 - `session-env` — variáveis de ambiente da sessão gráfica, para aplicativos
   de janela (veja abaixo)
+- `system-env` — variáveis de proxy em `/etc/environment`, para todo login
+  PAM da máquina, inclusive o `root` (veja abaixo); exige `sudo`
 - `git`
 - `npm`
 - `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato
@@ -108,6 +110,30 @@ session-env  true  true  http://127.0.0.1:8888 — profile uses port 9090; re-ap
 Fora de uma sessão gráfica (servidor, container, SSH puro) não há
 `systemd --user` para conversar, e o target é pulado como qualquer outro
 indisponível.
+
+### `system-env` e o `root`
+
+`shell` e `session-env` só alcançam o usuário que rodou o comando — nada que
+o `root` leia é tocado. Numa rede que só sai por proxy, isso deixa
+`sudo apt update`, `sudo curl` e afins sem internet: o `sudo` roda com
+`env_reset` e descarta `HTTP_PROXY`/`HTTPS_PROXY` do ambiente.
+
+`system-env` fecha esse buraco escrevendo um bloco marcado em
+`/etc/environment`, lido pelo `pam_env` na criação de qualquer sessão PAM —
+login no console, `ssh root@host`, `su -`, `sudo -i` e, no Debian/Ubuntu
+(onde `/etc/pam.d/sudo` inclui `pam_env`), também o `sudo <comando>` comum.
+Só as linhas do bloco são gerenciadas; o resto do arquivo (`PATH`, `LANG`, …)
+fica intacto.
+
+**É um arquivo do sistema, não por usuário.** Toda conta da máquina passa a
+receber essas variáveis no login, não só quem aplicou. Para uma máquina
+inteira atrás de um proxy isso costuma ser o desejado, mas é um alcance maior
+que o dos outros targets de ambiente — por isso é um target separado e
+explícito, e exige `sudo`.
+
+Como em `session-env`, **processos já em execução não são afetados**, e o
+systemd de _serviços de sistema_ não lê `/etc/environment` (o `dockerd`, por
+exemplo, é tratado pelo target `dockerd`).
 
 `proxy unset --targets gnome` também limpa o cache de proxy do PackageKit
 (usado por GNOME Software/Discover) quando presente, contornando um bug

@@ -22,30 +22,57 @@ func (t *vscodeTarget) SessionScoped() bool { return false }
 func (t *vscodeTarget) Available() bool     { return true }
 
 type vscodeProduct struct {
-	dir  string // config dir name under $XDG_CONFIG_HOME/<dir>/User/settings.json
-	name string
-	cmd  string // CLI binary, used to spot an install that has no settings.json
-	snap string // snap package name, empty when the editor ships no snap
+	dir     string // config dir name, e.g. "Code" in .../<dir>/User/settings.json
+	name    string
+	cmd     string // native CLI binary name
+	snap    string // snap package name, empty when the editor ships no snap
+	flatpak string // flatpak application id, empty when there is no flatpak
 }
 
 // vscodeProducts lists the editors sharing VS Code's settings.json format.
 var vscodeProducts = []vscodeProduct{
-	{"Code", "VS Code", "code", "code"},
-	{"Cursor", "Cursor", "cursor", ""},
-	{"Antigravity", "Antigravity", "antigravity", ""},
+	{dir: "Code", name: "VS Code", cmd: "code", snap: "code", flatpak: "com.visualstudio.code"},
+	{dir: "Cursor", name: "Cursor", cmd: "cursor"},
+	{dir: "Antigravity", name: "Antigravity", cmd: "antigravity"},
 }
 
-// vscodeInstall is one editor installation on this machine: the label the
-// status line shows and the settings.json that belongs to it.
+// packaging is how an editor was installed. It decides where settings.json
+// lives and how to tell the editor is present — a snap and a flatpak each
+// keep their config inside a sandboxed home that never sees the host's
+// ~/.config, so "the one true path" would configure a file the editor the
+// user actually launches never opens.
+type packaging int
+
+const (
+	pkgNative packaging = iota
+	pkgSnap
+	pkgFlatpak
+)
+
+func (p packaging) label() string {
+	switch p {
+	case pkgSnap:
+		return " (snap)"
+	case pkgFlatpak:
+		return " (flatpak)"
+	default:
+		return ""
+	}
+}
+
+// vscodeInstall is one editor installation: the label the status line shows,
+// the settings.json that belongs to it, and enough of the product to decide
+// whether it is really present.
 //
-// Installation, not product, is the unit of work here because one editor can
-// be present twice in different packagings, each with its own settings.json.
-// A snap is confined to ~/snap/<pkg>/current and never reads the host's
-// ~/.config, so writing the proxy to the "one true path" configures a file
-// the editor the user launches may never open.
+// Installation, not product, is the unit of work because one editor can be
+// present several times in different packagings, each with its own
+// settings.json — configuring one and missing another leaves whichever the
+// user launches unproxied.
 type vscodeInstall struct {
 	name string
 	path string
+	pkg  packaging
+	prod vscodeProduct
 }
 
 // vscodeSettingsPath is where a natively packaged editor (.deb, tarball,
@@ -82,69 +109,120 @@ func snapSettingsPath(snapPkg, dir string) (string, error) {
 	return filepath.Join(home, "snap", snapPkg, "current", ".config", dir, "User", "settings.json"), nil
 }
 
+// flatpakSettingsPath is where a flatpak-confined editor keeps its settings:
+// the sandbox maps ~/.var/app/<id>/config onto its $XDG_CONFIG_HOME, and the
+// product dir inside is the same one the native packaging uses.
+func flatpakSettingsPath(appID, dir string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".var", "app", appID, "config", dir, "User", "settings.json"), nil
+}
+
+// flatpakInstalled reports whether a flatpak app is installed, by the
+// wrapper flatpak drops at install time — before first launch, so before
+// ~/.var/app/<id> exists. Both the per-user and system-wide export dirs are
+// checked; shelling out to `flatpak info` would be heavier for the same
+// answer.
+func flatpakInstalled(appID string) bool {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+	}
+	for _, base := range []string{
+		filepath.Join(dataHome, "flatpak", "exports", "bin"),
+		"/var/lib/flatpak/exports/bin",
+	} {
+		if base == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(base, appID)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// snapInstalled reports whether a snap package's confined home exists.
+func snapInstalled(snapPkg string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, "snap", snapPkg))
+	return err == nil
+}
+
 // candidates lists every place this product could keep its settings, native
 // packaging first.
 func (p vscodeProduct) candidates() []vscodeInstall {
 	var out []vscodeInstall
-	if path, err := vscodeSettingsPath(p.dir); err == nil {
-		out = append(out, vscodeInstall{p.name, path})
-	}
-	if p.snap != "" {
-		if path, err := snapSettingsPath(p.snap, p.dir); err == nil {
-			out = append(out, vscodeInstall{p.name + " (snap)", path})
+	add := func(pkg packaging, path string, err error) {
+		if err == nil {
+			out = append(out, vscodeInstall{p.name + pkg.label(), path, pkg, p})
 		}
+	}
+	path, err := vscodeSettingsPath(p.dir)
+	add(pkgNative, path, err)
+	if p.snap != "" {
+		path, err := snapSettingsPath(p.snap, p.dir)
+		add(pkgSnap, path, err)
+	}
+	if p.flatpak != "" {
+		path, err := flatpakSettingsPath(p.flatpak, p.dir)
+		add(pkgFlatpak, path, err)
 	}
 	return out
 }
 
 // exists reports whether this installation is really on the machine.
 //
-// Either the settings.json or the User directory containing it will do: the
-// editors write settings.json only once a setting is changed, so a working
-// install can go a long time without one — and treating "no file" as "no
-// editor" is what made Set skip these users silently. The User directory,
-// not the product directory above it, because that one survives an uninstall
-// as a leftover.
+// The settings.json or the User directory containing it is the everyday
+// signal: these editors write settings.json only once a setting is changed,
+// so a working install can go a long time without one — and treating "no
+// file" as "no editor" is what made Set skip these users silently. The User
+// directory, not the product directory above it, because that one survives
+// an uninstall as a leftover.
+//
+// Failing that, a packaging-specific install-time marker catches an editor
+// that has never been launched, so none of its directories exist yet.
 func (i vscodeInstall) exists() bool {
 	if _, err := os.Stat(i.path); err == nil {
 		return true
 	}
-	_, err := os.Stat(filepath.Dir(i.path))
-	return err == nil
+	if _, err := os.Stat(filepath.Dir(i.path)); err == nil {
+		return true
+	}
+	switch i.pkg {
+	case pkgNative:
+		// A resolved /snap/bin/code belongs to the snap candidate, not
+		// this one — the symlink is not followed on purpose, it points
+		// at the snap wrapper and resolving it loses that fact.
+		bin, err := exec.LookPath(i.prod.cmd)
+		return err == nil && !isSnapBinary(bin)
+	case pkgSnap:
+		if snapInstalled(i.prod.snap) {
+			return true
+		}
+		bin, err := exec.LookPath(i.prod.cmd)
+		return err == nil && isSnapBinary(bin)
+	case pkgFlatpak:
+		return flatpakInstalled(i.prod.flatpak)
+	}
+	return false
 }
 
-// vscodeInstalls returns every editor installation found on this machine.
-//
-// A product with no directories at all still counts when its CLI is on PATH
-// — an install that has never been launched. Which candidate that resolves
-// to depends on the packaging: a /snap/bin CLI means the snap location, and
-// pointing it at ~/.config instead would write somewhere the confined editor
-// cannot read.
+// vscodeInstalls returns every editor installation found on this machine —
+// every candidate location that a real install backs.
 func vscodeInstalls() []vscodeInstall {
 	var found []vscodeInstall
 	for _, p := range vscodeProducts {
-		candidates := p.candidates()
-
-		var present []vscodeInstall
-		for _, c := range candidates {
+		for _, c := range p.candidates() {
 			if c.exists() {
-				present = append(present, c)
-			}
-		}
-		if len(present) > 0 {
-			found = append(found, present...)
-			continue
-		}
-
-		binary, err := exec.LookPath(p.cmd)
-		if err != nil {
-			continue
-		}
-		wantSnap := isSnapBinary(binary)
-		for _, c := range candidates {
-			if strings.HasSuffix(c.name, " (snap)") == wantSnap {
 				found = append(found, c)
-				break
 			}
 		}
 	}

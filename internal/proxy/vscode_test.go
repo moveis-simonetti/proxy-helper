@@ -22,6 +22,33 @@ func withFakeVscodeConfig(t *testing.T) string {
 	return dir
 }
 
+// flatpakUserDir creates the sandboxed config directory a flatpak-installed
+// editor uses: ~/.var/app/<app-id>/config/<product>/User.
+func flatpakUserDir(t *testing.T, appID, product string) string {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), ".var", "app", appID, "config", product, "User")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// flatpakExportsBin drops the wrapper flatpak creates at install time under
+// $XDG_DATA_HOME/flatpak/exports/bin/<app-id> — the signal for an editor
+// installed but never launched, so ~/.var/app/<id> does not exist yet.
+func flatpakExportsBin(t *testing.T, appID string) {
+	t.Helper()
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	dir := filepath.Join(dataHome, "flatpak", "exports", "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, appID), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // snapUserDir creates the confined config directory a snap-installed editor
 // uses: ~/snap/<pkg>/current/.config/<product>/User.
 func snapUserDir(t *testing.T, snapPkg, product string) string {
@@ -210,6 +237,85 @@ func TestSnapBinaryPath(t *testing.T) {
 	for path, want := range cases {
 		if got := isSnapBinary(path); got != want {
 			t.Errorf("isSnapBinary(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// The third location from the same report: a flatpak-confined VS Code keeps
+// settings.json under ~/.var/app/<id>/config, invisible to both the native
+// and the snap paths.
+func TestVscodeStatusFindsFlatpakInstall(t *testing.T) {
+	withFakeVscodeConfig(t)
+	flatpakUserDir(t, "com.visualstudio.code", "Code")
+
+	st, err := (&vscodeTarget{}).Status(&Executor{}, false)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Detail != "not set" {
+		t.Errorf("Detail = %q, want %q", st.Detail, "not set")
+	}
+}
+
+func TestVscodeSetWritesInsideFlatpakHome(t *testing.T) {
+	withFakeVscodeConfig(t)
+	dir := flatpakUserDir(t, "com.visualstudio.code", "Code")
+
+	cfg := Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"}
+	if err := (&vscodeTarget{}).Set(&Executor{}, cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("flatpak settings.json not written: %v", err)
+	}
+	if !strings.Contains(string(data), `"http.proxy": "http://127.0.0.1:8888"`) {
+		t.Errorf("http.proxy missing:\n%s", data)
+	}
+}
+
+// Installed but never launched: no ~/.var/app/<id> yet, only the exports
+// wrapper. Set must still create the settings.json in the flatpak location.
+func TestVscodeSetFindsFlatpakByExportsBin(t *testing.T) {
+	withFakeVscodeConfig(t)
+	flatpakExportsBin(t, "com.visualstudio.code")
+
+	cfg := Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"}
+	if err := (&vscodeTarget{}).Set(&Executor{}, cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	want := filepath.Join(os.Getenv("HOME"), ".var", "app", "com.visualstudio.code", "config", "Code", "User", "settings.json")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("settings.json not created at flatpak path: %v", err)
+	}
+}
+
+// All three packagings of one editor, side by side. Each has its own
+// settings.json and its own status label; configuring two and missing the
+// third would leave whichever the user launches unproxied.
+func TestVscodeSetWritesAllThreePackagings(t *testing.T) {
+	home := withFakeVscodeConfig(t)
+	native := userDir(t, home, "Code")
+	snap := snapUserDir(t, "code", "Code")
+	flat := flatpakUserDir(t, "com.visualstudio.code", "Code")
+
+	cfg := Config{Scheme: "http", Host: "127.0.0.1", Port: "8888"}
+	if err := (&vscodeTarget{}).Set(&Executor{}, cfg); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	for _, dir := range []string{native, snap, flat} {
+		if _, err := os.Stat(filepath.Join(dir, "settings.json")); err != nil {
+			t.Errorf("settings.json missing in %s: %v", dir, err)
+		}
+	}
+
+	st, err := (&vscodeTarget{}).Status(&Executor{}, false)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	for _, want := range []string{"VS Code=", "VS Code (snap)=", "VS Code (flatpak)="} {
+		if !strings.Contains(st.Detail, want) {
+			t.Errorf("Detail = %q, want it to mention %q", st.Detail, want)
 		}
 	}
 }

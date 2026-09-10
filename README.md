@@ -62,7 +62,10 @@ separada por vírgula (ou `all`, o padrão):
   de janela (veja abaixo)
 - `git`
 - `npm`
-- `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato (Cursor, Antigravity)
+- `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato
+  (Cursor, Antigravity); detecta as instalações nativa, Snap
+  (`~/snap/code/current/.config`) e Flatpak (`~/.var/app/…/config`), e
+  configura cada uma separadamente
 - `gnome` — configurações de proxy do sistema GNOME
 - `kde` — proxy do KIO (KDE Plasma), via `kwriteconfig`
 - `dockerd` — o daemon do Docker

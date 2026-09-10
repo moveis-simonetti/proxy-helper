@@ -20,6 +20,7 @@ func AllTargets() []Target {
 		NewLxdTarget(),
 		NewSnapTarget(),
 		NewAptTarget(),
+		NewSystemEnvTarget(),
 	}
 }
 

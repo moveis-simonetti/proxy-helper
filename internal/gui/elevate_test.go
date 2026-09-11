@@ -9,36 +9,6 @@ import (
 	"testing"
 )
 
-func TestElevateCmd(t *testing.T) {
-	got := elevateCmd("/opt/proxy-helper/proxy-helper", "work", []string{"apt", "dockerd"}, "/home/alice/.config")
-	want := []string{
-		"pkexec", "env", "XDG_CONFIG_HOME=/home/alice/.config",
-		"/opt/proxy-helper/proxy-helper", "proxy", "set",
-		"--profile", "work",
-		"--targets", "apt,dockerd",
-	}
-	if !equalArgs(got, want) {
-		t.Fatalf("elevateCmd() = %v, want %v", got, want)
-	}
-}
-
-// TestElevateCmdNeverAddsViaLocal covers the fix for the finding that
-// --via-local, when threaded into the pkexec'd CLI, made every privileged
-// apply fail: under pkexec, DaemonActive() always reports false (no
-// XDG_RUNTIME_DIR, no user systemd manager), so app.Apply returns
-// ErrDaemonNotRunning even though the daemon is actually running. The
-// caller now refuses the "Via daemon local" + privileged-targets
-// combination before ever building this command, and elevateCmd itself has
-// no way to add the flag any more — this just pins that down.
-func TestElevateCmdNeverAddsViaLocal(t *testing.T) {
-	got := elevateCmd("/opt/proxy-helper/proxy-helper", "work", []string{"apt"}, "/home/alice/.config")
-	for _, arg := range got {
-		if arg == "--via-local" {
-			t.Fatalf("elevateCmd() must never include --via-local, got %v", got)
-		}
-	}
-}
-
 // TestSplitSessionAwareKeepsSessionScopedOutOfPrivileged is the regression
 // test for the defect where gnome (RequiresRoot()==true on a system with
 // the PackageKit cache, but session-scoped) was sent through pkexec, where

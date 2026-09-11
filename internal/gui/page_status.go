@@ -17,10 +17,9 @@ import (
 
 // statusDeps builds the app.Deps the Status page needs. Collect and Elevate
 // only ever touch ResolveTargets; DaemonActive, ReloadDaemon and BridgeAddr
-// exist here for Apply (via --via-local, not exercised by this page's own
-// buttons yet, but app.Apply dereferences them unconditionally when
-// viaLocal is true) and are the real internal/serve implementations, not
-// stubs — a GUI has no test double to fall back to.
+// exist here for Apply, which always routes via the local daemon now, and
+// are the real internal/serve implementations, not stubs — a GUI has no
+// test double to fall back to.
 func statusDeps() app.Deps {
 	return app.Deps{
 		ResolveTargets: proxy.ByNames,
@@ -54,8 +53,7 @@ type statusPageRow struct {
 }
 
 // statusPage owns the widgets of the Status page: one grid row per target,
-// in AllTargets() order, plus a footer with the "via daemon local" toggle
-// and the selection summary.
+// in AllTargets() order, plus a footer with the selection summary.
 type statusPage struct {
 	runner *runner
 
@@ -66,7 +64,6 @@ type statusPage struct {
 	rows           []*statusPageRow
 	plainReloadBtn *gtk.Button
 	summary        *gtk.Label
-	viaLocal       *gtk.CheckButton
 
 	// elevationBar tells the user some target could not be read without
 	// sudo and offers the one button that does that read. Hidden by
@@ -223,18 +220,6 @@ func setupStatusPage(win *window, r *runner) (*statusPage, error) {
 		return nil, err
 	}
 	actions.SetMarginTop(spaceRelated)
-
-	viaLocal, err := gtk.CheckButtonNew()
-	if err != nil {
-		return nil, err
-	}
-	viaLocalLbl, err := gtk.LabelNew("Via daemon local")
-	if err != nil {
-		return nil, err
-	}
-	actions.PackStart(viaLocal, false, false, 0)
-	actions.PackStart(viaLocalLbl, false, false, 0)
-	sp.viaLocal = viaLocal
 
 	// The buttons live in their own box so PackEnd right-aligns the group
 	// while keeping them in reading order inside it.
@@ -469,34 +454,18 @@ func (sp *statusPage) load() {
 	sp.runner.submit(func() func() {
 		ex := &proxy.Executor{Escalation: proxy.EscalateNone, Out: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 		sts, err := app.Collect(statusDeps(), ex, []string{"all"}, false)
-		// Read via_local alongside the statuses: the checkbox used to be a
-		// pure input that always started unchecked, even on a machine whose
-		// targets DO point at the local daemon. Applying from that state
-		// would write the real upstream credentials into all eleven targets
-		// and tear the plumbing down — the exact outcome --via-local exists
-		// to prevent. A LoadProfiles failure is not worth failing the whole
-		// read over; the checkbox just keeps its previous position.
-		viaLocal := false
 		var health app.DaemonHealth
 		if pf, pfErr := proxy.LoadProfiles(); pfErr == nil {
-			viaLocal = pf.ViaLocal
 			// Probed here, inside the runner job: ListeningAddrs dials, and
 			// on a loaded machine that can cost a few hundred milliseconds
 			// — never on the GTK thread.
 			health = app.CheckDaemon(pf, app.LiveDaemonChecks())
 		}
 		return func() {
-			sp.applyViaLocal(viaLocal)
 			sp.setStrandedVisible(health)
 			sp.applyStatuses(sts, err)
 		}
 	})
-}
-
-// applyViaLocal puts the checkbox where config.json says the machine actually
-// is. Runs on the UI thread, from a runner delivery.
-func (sp *statusPage) applyViaLocal(on bool) {
-	sp.viaLocal.SetActive(on)
 }
 
 // reloadWithSudo re-checks only the targets app.NeedsElevation flagged,
@@ -827,10 +796,9 @@ func applyPrivileged(profile string, targets []string) (summary, cliOutput strin
 	}
 }
 
-// applyPrivilegedViaLocal is applyPrivileged's counterpart for "Via daemon
-// local": instead of --profile, it resolves the loopback (and, when the
-// Docker bridge is on and dockerd is selected, the bridge) address itself
-// and calls elevateViaLocalCmds — one pkexec call, or two when dockerd needs
+// applyPrivilegedViaLocal resolves the loopback (and, when the Docker
+// bridge is on and dockerd is selected, the bridge) address itself and
+// calls elevateViaLocalCmds — one pkexec call, or two when dockerd needs
 // the bridge and other privileged targets still need loopback (see that
 // function's doc comment). Called off the UI thread, from inside a runner
 // job; the caller (apply()) is responsible for warning about a second
@@ -907,54 +875,33 @@ func clearPrivileged(targets []string) (summary, cliOutput string) {
 // apply applies the current selection: the user-level targets in-process,
 // with escalation refused so an unexpected root requirement fails visibly
 // instead of hanging on a prompt nobody can see, and the privileged targets
-// through the single pkexec call in applyPrivileged. Runs off the UI
-// thread via the runner; reloads the table afterwards so the grid reflects
-// what actually happened rather than what was merely attempted.
+// through the single pkexec call in applyPrivilegedViaLocal. Runs off the
+// UI thread via the runner; reloads the table afterwards so the grid
+// reflects what actually happened rather than what was merely attempted.
 //
-// This is a two-stage submit, not one job. "Via daemon local" plus a
-// privileged dockerd needs a heads-up, before anything runs, that it takes
-// two separate pkexec calls (see twoDialogsWarning's doc comment) — but
-// deciding that needs LoadProfiles, which is file I/O and so cannot run on
-// the UI thread (the earlier version did, and that is finding 1 this
-// replaced). The first job below does only that read, off the UI thread;
-// the closure it returns runs on the UI thread, shows the warning if
-// needed, and only then submits the second job — runApply — which does the
-// actual work. Because the runner processes one job at a time, that warning
-// is guaranteed to land before runApply's pkexec call ever prompts.
+// This is a two-stage submit, not one job. A privileged dockerd needs a
+// heads-up, before anything runs, that it takes two separate pkexec calls
+// (see twoDialogsWarning's doc comment) — but deciding that needs
+// LoadProfiles, which is file I/O and so cannot run on the UI thread. The
+// first job below does only that read, off the UI thread; the closure it
+// returns runs on the UI thread, shows the warning if needed, and only
+// then submits the second job — runApply — which does the actual work.
+// Because the runner processes one job at a time, that warning is
+// guaranteed to land before runApply's pkexec call ever prompts.
 func (sp *statusPage) apply() {
 	user, privileged := sp.selectedNames()
-	// Read on the UI thread, right next to the selection: the job body
-	// below runs on the runner's worker goroutine, and GetActive on a
-	// widget from there is undefined behaviour (see this method's doc
-	// comment and reloadWithSudo's neighbours for the same pattern applied
-	// to the checkboxes).
-	viaLocal := sp.viaLocal.GetActive()
 	if len(user) == 0 && len(privileged) == 0 {
 		sp.showResult("nenhum alvo selecionado")
 		return
 	}
 
 	sp.runner.submit(func() func() {
-		// "Via daemon local" plus privileged targets used to be refused
-		// outright here: pkexec runs the reinvoked CLI as root with no
-		// XDG_RUNTIME_DIR and no user systemd manager, so its DaemonActive()
-		// check always reported the daemon as stopped even when it was
-		// running, and app.Apply failed every privileged target with a
-		// message that was simply false (see elevateCmd's doc comment). The
-		// fix is to never pass --via-local into the elevated CLI at all:
-		// applyPrivilegedViaLocal resolves the loopback/bridge address
-		// itself and passes it as an explicit --host, which needs neither
-		// DaemonActive() nor a profile lookup. That address carries no
-		// credentials (proxy.TargetConfig strips them for every --via-local
-		// target), so passing it as a command-line flag does not leak a
-		// password to `ps` the way --pass would.
-		//
 		// LoadProfiles here is a quick read used only to decide whether to
 		// warn about the two-pkexec-calls case, not the authoritative one —
 		// runApply reloads it itself. A failure here just means no warning,
 		// not a blocked apply.
 		warnTwoDialogs := false
-		if viaLocal && len(privileged) > 0 {
+		if len(privileged) > 0 {
 			if pf, err := proxy.LoadProfiles(); err == nil && needsTwoElevatedCalls(privileged, pf.DockerBridge) {
 				warnTwoDialogs = true
 			}
@@ -964,17 +911,17 @@ func (sp *statusPage) apply() {
 			if warnTwoDialogs {
 				sp.showResult(twoDialogsWarning)
 			}
-			sp.runApply(user, privileged, viaLocal)
+			sp.runApply(user, privileged)
 		}
 	})
 }
 
 // runApply submits the job that actually applies the selection: the
 // user-level targets in-process, the privileged ones through the single
-// pkexec call in applyPrivileged/applyPrivilegedViaLocal. Called on the UI
-// thread only, from the closure apply()'s first-stage job returns — see
-// apply's doc comment for why the warning has to land before this submits.
-func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
+// pkexec call in applyPrivilegedViaLocal. Called on the UI thread only,
+// from the closure apply()'s first-stage job returns — see apply's doc
+// comment for why the warning has to land before this submits.
+func (sp *statusPage) runApply(user, privileged []string) {
 	sp.runner.submit(func() func() {
 		profile, cfg, pf, err := activeProfile()
 		if err != nil {
@@ -985,32 +932,14 @@ func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
 		var userErr error
 		if len(user) > 0 {
 			ex := &proxy.Executor{Escalation: proxy.EscalateNone, Out: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
-			rep, userErr = app.Apply(statusDeps(), ex, profile, cfg, user, viaLocal)
+			rep, userErr = app.Apply(statusDeps(), ex, profile, cfg, user, true)
 		}
 
 		var privMsg, privOut string
 		if len(privileged) > 0 {
-			if viaLocal {
-				port := pf.EffectiveLocalPort()
-				mergedNoProxy := proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
-				privMsg, privOut = sp.applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
-			} else {
-				privMsg, privOut = applyPrivileged(profile, privileged)
-			}
-		}
-
-		// Only here is the whole selection in hand. app.Apply saw the
-		// user-level half and the reinvoked CLI saw the privileged half, so
-		// neither could tell whether every available target was rewritten —
-		// and the flag stayed on, ticking "Via daemon local" back the moment
-		// the page reloaded. Asked after both halves, over the union.
-		if !viaLocal {
-			if err := app.ClearViaLocal(append(append([]string{}, user...), privileged...)); err != nil {
-				if privMsg != "" {
-					privMsg += "; "
-				}
-				privMsg += fmt.Sprintf("aviso: não foi possível atualizar o estado do daemon local: %s", err)
-			}
+			port := pf.EffectiveLocalPort()
+			mergedNoProxy := proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
+			privMsg, privOut = sp.applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
 		}
 
 		return func() {
@@ -1021,14 +950,13 @@ func (sp *statusPage) runApply(user, privileged []string, viaLocal bool) {
 	})
 }
 
-// twoDialogsWarning tells the user up front that this apply needs two
-// pkexec calls, not one, so a second unannounced password prompt does not
-// look like the first one failing. It fires only for the one combination
-// that needs it: Docker bridge enabled and dockerd among the selected
-// privileged targets — dockerd needs the bridge address, the rest need
-// loopback, and a single --host cannot serve both (see
-// elevateViaLocalCmds's doc comment). Replaced by the real result once both
-// calls finish.
+// twoDialogsWarning tells the user up front that applying needs two pkexec
+// calls, not one, so a second unannounced password prompt does not look
+// like the first one failing. It fires only for the one combination that
+// needs it: Docker bridge enabled and dockerd among the selected privileged
+// targets — dockerd needs the bridge address, the rest need loopback, and a
+// single --host cannot serve both (see elevateViaLocalCmds's doc comment).
+// Replaced by the real result once both calls finish.
 const twoDialogsWarning = "\"Via daemon local\": bridge do Docker habilitada e dockerd selecionado vão pedir a senha " +
 	"duas vezes — uma para o dockerd (endereço da bridge) e outra para os demais alvos privilegiados (loopback)."
 
@@ -1094,9 +1022,6 @@ func (sp *statusPage) showApplyClearResult(rep *app.Report, userErr error, privM
 // task's job; this shows the preview text as-is in the result label.
 func (sp *statusPage) simulate() {
 	names := sp.selectedTargets()
-	// Read on the UI thread, right next to the selection: see apply()'s
-	// equivalent comment — the job body below runs off the UI thread.
-	viaLocal := sp.viaLocal.GetActive()
 	if len(names) == 0 {
 		sp.showResult("nenhum target selecionado")
 		return
@@ -1110,7 +1035,7 @@ func (sp *statusPage) simulate() {
 
 		buf := &bytes.Buffer{}
 		ex := &proxy.Executor{DryRun: true, Out: buf}
-		_, err = app.Apply(statusDeps(), ex, profile, cfg, names, viaLocal)
+		_, err = app.Apply(statusDeps(), ex, profile, cfg, names, true)
 
 		if err != nil {
 			return func() { sp.showResult(fmt.Sprintf("erro: %s", err)) }

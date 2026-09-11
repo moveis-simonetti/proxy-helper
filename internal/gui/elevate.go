@@ -96,8 +96,15 @@ func elevateCmd(binary, profile string, targets []string, xdgConfigHome string) 
 
 // elevateViaLocalCmd builds one elevated "proxy set --host ..." invocation
 // that points targets at host:port — the loopback or Docker-bridge address
-// of the local daemon — instead of using --via-local (see elevateCmd's
-// comment for why --via-local itself is never used here).
+// of the local daemon — instead of using --via-local.
+//
+// --via-local is never passed into the elevated CLI: under pkexec this
+// process runs as root, with no XDG_RUNTIME_DIR and no user systemd
+// manager, so DaemonActive() always reports false even when the daemon is
+// running as the invoking user — app.Apply would then fail every
+// privileged target with a misleading "the local proxy is not running"
+// error. Passing an explicit --host/--port sidesteps DaemonActive() and
+// the profile/config lookup entirely.
 //
 // Passing the resolved address as an explicit --host/--port flag, rather
 // than through --profile, is safe here in a way it would not be for

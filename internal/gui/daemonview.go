@@ -141,16 +141,11 @@ func daemonPending(baseline, current daemonFormValues) bool {
 	return baseline != current
 }
 
-// daemonPrimaryActionLabel is what the service block's primary button says.
-// Named distinctly from profileform.go's primaryActionLabel: that one is the
-// Perfis form's own button label and takes a formMode, an unrelated concept
-// to this page's installed/not-installed state.
-func daemonPrimaryActionLabel(installed bool) string {
-	if installed {
-		return "Aplicar alterações"
-	}
-	return "Instalar serviço"
-}
+// daemonSaveLabel is what the service block's single button says now that
+// installing is no longer something the GUI offers (see page_daemon.go's
+// setupDaemonPage doc comment) — there is only ever one action left:
+// resending the port/bridge form to a daemon that is already there.
+const daemonSaveLabel = "Salvar"
 
 // sameRows reports whether two consecutive reads produced identical tables.
 //
@@ -214,7 +209,7 @@ func daemonApplyMessage(wasInstalled bool, warning string) string {
 // daemonPendingNotice is the line shown while the form holds changes that
 // were never sent to the system.
 //
-// The bridge switch and the port field change intent only; the primary
+// The bridge switch and the port field change intent only; the Salvar
 // button applies them. That is the design, but the sole feedback used to be
 // that button quietly turning sensitive — and a user who turned the bridge
 // switch on, closed the window, and never pressed it reported the feature as
@@ -223,5 +218,5 @@ func daemonPendingNotice(pending bool) string {
 	if !pending {
 		return ""
 	}
-	return fmt.Sprintf("alterações não aplicadas — clique em %q", daemonPrimaryActionLabel(true))
+	return fmt.Sprintf("alterações não aplicadas — clique em %q", daemonSaveLabel)
 }

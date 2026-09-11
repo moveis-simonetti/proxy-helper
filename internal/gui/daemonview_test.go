@@ -200,15 +200,6 @@ func TestDaemonPending(t *testing.T) {
 	}
 }
 
-func TestDaemonPrimaryActionLabel(t *testing.T) {
-	if got := daemonPrimaryActionLabel(false); got != "Instalar serviço" {
-		t.Errorf("not installed: got %q, want %q", got, "Instalar serviço")
-	}
-	if got := daemonPrimaryActionLabel(true); got != "Aplicar alterações" {
-		t.Errorf("installed: got %q, want %q", got, "Aplicar alterações")
-	}
-}
-
 func TestSummarizeProfile(t *testing.T) {
 	got := summarize(true, true, nil, "")
 	if got.Profile != "nenhum" {
@@ -316,9 +307,9 @@ func TestDaemonPendingNotice(t *testing.T) {
 		t.Fatal("daemonPendingNotice(true) = empty, want a notice")
 	}
 	// Naming the button is what makes the notice actionable rather than
-	// just alarming, so it must stay in sync with daemonPrimaryActionLabel.
-	if !strings.Contains(got, daemonPrimaryActionLabel(true)) {
+	// just alarming, so it must stay in sync with daemonSaveLabel.
+	if !strings.Contains(got, daemonSaveLabel) {
 		t.Errorf("daemonPendingNotice(true) = %q, want it to name %q",
-			got, daemonPrimaryActionLabel(true))
+			got, daemonSaveLabel)
 	}
 }

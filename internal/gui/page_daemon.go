@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"time"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
 	"proxy-helper/internal/serve"
 
@@ -63,6 +64,20 @@ type daemonPage struct {
 	removeBtn  *gtk.Button
 	primaryBtn *gtk.Button
 	resultLbl  *gtk.Label
+
+	// strandedBar/strandedLbl are page_status.go's newStrandedBar pattern,
+	// reused here: this is the new (and only) place "Remover serviço" lives,
+	// as a recovery action inside the one warning that means something is
+	// actually wrong — not a button sitting in the normal flow with nothing
+	// to protect against. See setStrandedVisible.
+	strandedBar *gtk.InfoBar
+	strandedLbl *gtk.Label
+
+	// notInstalledLbl replaces the whole button row when load() finds no
+	// unit on disk: installing the daemon from the GUI is no longer a
+	// supported path (the .deb does it, or "proxy serve install" from a
+	// terminal for a source build) — there is nothing left to click here.
+	notInstalledLbl *gtk.Label
 
 	// staleTargetsBtn appears only after a port change left the targets on
 	// the old port. It navigates to the Status page instead of applying
@@ -154,6 +169,48 @@ type daemonPage struct {
 	// loop. Quiet refreshes are simply skipped while one is in flight.
 	// UI thread only.
 	logsInFlight int
+}
+
+// newDaemonStrandedBar builds the warning shown when the daemon is
+// Stranded (targets point at a port nothing answers on) or Outdated (a
+// pre-mode build is still running). Same shape as page_status.go's
+// newStrandedBar, with one addition: "Remover serviço" rides along as the
+// bar's action widget (AddActionWidget, same mechanism newElevationBar
+// uses for "Ler com sudo") — this is the only place that button exists now.
+// Hidden at construction; setStrandedVisible reveals it, and hides the
+// button specifically when the service was never installed to begin with
+// (see setStrandedVisible's doc comment).
+func newDaemonStrandedBar(onRemove func()) (*gtk.InfoBar, *gtk.Label, *gtk.Button, error) {
+	bar, err := gtk.InfoBarNew()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bar.SetMessageType(gtk.MESSAGE_ERROR)
+	bar.SetNoShowAll(true)
+	bar.SetVisible(false)
+
+	content, err := bar.GetContentArea()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lbl.SetXAlign(0)
+	lbl.SetLineWrap(true)
+	content.PackStart(lbl, true, true, 0)
+
+	btn, err := gtk.ButtonNewWithLabel("Remover serviço")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	btn.SetNoShowAll(true)
+	btn.SetVisible(false)
+	btn.Connect("clicked", onRemove)
+	bar.AddActionWidget(btn, gtk.RESPONSE_NONE)
+
+	return bar, lbl, btn, nil
 }
 
 // setupDaemonPage fills win.DaemonPage (built empty by newWindow) with the
@@ -324,28 +381,11 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	buttons.PackStart(reloadBtn, false, false, 0)
 	dp.reloadBtn = reloadBtn
 
-	removeBtn, err := gtk.ButtonNewWithLabel("Remover serviço")
-	if err != nil {
-		return nil, err
-	}
-	// Hidden (not merely insensitive) until load() finds an installed unit:
-	// there is nothing to remove otherwise. SetNoShowAll(true) BEFORE
-	// SetVisible(false) — app.go's Run calls win.Window.ShowAll() once,
-	// after every page is set up, and ShowAll forces every descendant
-	// visible regardless of an earlier SetVisible(false). Already bit this
-	// project twice (page_profiles.go's removeBtn, page_status.go's
-	// "Recarregar com sudo").
-	removeBtn.SetNoShowAll(true)
-	removeBtn.SetVisible(false)
-	removeBtn.Connect("clicked", func() { dp.confirmAndRemove() })
-	buttons.PackStart(removeBtn, false, false, 0)
-	dp.removeBtn = removeBtn
-
-	// Packed end LAST, per the same convention as page_profiles.go's
-	// primaryBtn: PackEnd stacks each new call closer to the true end than
-	// the ones before it, putting this in the rightmost, primary-action
-	// position the brief's layout shows.
-	primaryBtn, err := gtk.ButtonNewWithLabel(daemonPrimaryActionLabel(false))
+	// Salvar: the only action left in the normal flow. Installing is the
+	// .deb's job now (or "proxy serve install" for a source build — see
+	// notInstalledLbl below), and removing lives inside the Stranded/
+	// Outdated warning instead of sitting here unconditionally.
+	primaryBtn, err := gtk.ButtonNewWithLabel(daemonSaveLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +394,29 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	dp.primaryBtn = primaryBtn
 
 	win.DaemonPage.PackStart(buttons, false, false, 0)
+
+	notInstalledLbl, err := gtk.LabelNew("Daemon não instalado. Rode \"proxy serve install\" no terminal, ou instale o pacote \".deb\".")
+	if err != nil {
+		return nil, err
+	}
+	notInstalledLbl.SetXAlign(0)
+	notInstalledLbl.SetLineWrap(true)
+	// Same ShowAll trap as every other conditionally-hidden widget in this
+	// package (see the removeBtn comment this replaced, and
+	// page_status.go's elevationBar): SetNoShowAll BEFORE SetVisible(false).
+	notInstalledLbl.SetNoShowAll(true)
+	notInstalledLbl.SetVisible(false)
+	win.DaemonPage.PackStart(notInstalledLbl, false, false, 0)
+	dp.notInstalledLbl = notInstalledLbl
+
+	strandedBar, strandedLbl, removeBtn, err := newDaemonStrandedBar(func() { dp.confirmAndRemove() })
+	if err != nil {
+		return nil, err
+	}
+	win.DaemonPage.PackStart(strandedBar, false, false, 0)
+	dp.strandedBar = strandedBar
+	dp.strandedLbl = strandedLbl
+	dp.removeBtn = removeBtn
 
 	resultLbl, err := gtk.LabelNew("")
 	if err != nil {
@@ -465,14 +528,11 @@ func (dp *daemonPage) refreshActionState() {
 	// would be worse than saying nothing.
 	dp.pendingLbl.SetText(daemonPendingNotice(pending))
 
-	switch {
-	case dp.busy:
+	if dp.busy {
 		dp.primaryBtn.SetSensitive(false)
-	case !dp.installed:
-		dp.primaryBtn.SetSensitive(true)
-	default:
-		dp.primaryBtn.SetSensitive(pending)
+		return
 	}
+	dp.primaryBtn.SetSensitive(pending)
 }
 
 // confirmBridgeOn asks before turning the bridge switch ON — never before
@@ -527,13 +587,15 @@ func (dp *daemonPage) load() {
 		// and would not be on the UI thread.
 		listening := serve.ListeningAddrs(pf.EffectiveLocalPort())
 
-		return func() { dp.applyLoad(active, installed, pf, bridgeErr, listening) }
+		health := app.CheckDaemon(pf, app.LiveDaemonChecks())
+
+		return func() { dp.applyLoad(active, installed, pf, bridgeErr, listening, health) }
 	})
 }
 
 // applyLoad renders a load() result onto the widgets. UI thread only, called
 // from a runner delivery.
-func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, bridgeErr error, listening []string) {
+func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, bridgeErr error, listening []string, health app.DaemonHealth) {
 	port := pf.EffectiveLocalPort()
 	bridgeOn := pf.DockerBridge
 	bridgeAvailable := bridgeErr == nil
@@ -573,12 +635,57 @@ func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, b
 	// the form to match what it just read.
 	dp.baseline = daemonFormValues{Port: port, DockerBridge: bridgeOn}
 
-	dp.primaryBtn.SetLabel(daemonPrimaryActionLabel(installed))
-	dp.removeBtn.SetVisible(installed)
+	// Installing from the GUI is not a supported path any more (see
+	// setupDaemonPage's newDaemonStrandedBar comment) — without a unit on
+	// disk there is nothing this page can do about it, so the whole normal
+	// form gives way to a static message instead of a button that would
+	// only fail.
+	dp.portSpin.SetSensitive(installed)
+	dp.bridgeSwitch.SetSensitive(installed && bridgeAvailable)
+	dp.primaryBtn.SetVisible(installed)
+	dp.notInstalledLbl.SetVisible(!installed)
+
+	dp.setStrandedVisible(installed, health)
 
 	dp.resultLbl.SetText(dp.pendingResult)
 	dp.pendingResult = ""
 	dp.refreshActionState()
+}
+
+// setStrandedVisible shows or hides this page's Stranded/Outdated warning
+// — same trigger page_status.go's own bar uses (app.DaemonHealth), and the
+// only place "Remover serviço" appears now. The button itself is hidden
+// within an otherwise-visible bar when the service was never installed:
+// Outdated/Stranded both require ViaLocal (see DaemonHealth's doc
+// comment), which in practice needs config on disk, but installed is the
+// authoritative "is there a unit to remove" fact — trust it over inferring
+// the same thing from health.
+func (dp *daemonPage) setStrandedVisible(installed bool, h app.DaemonHealth) {
+	var n app.Notice
+	switch {
+	case h.Stranded():
+		n = app.Notice{
+			Kind: app.NoticeDaemonStranded,
+			Args: map[string]string{"port": fmt.Sprint(h.Port)},
+		}
+	case h.Outdated():
+		n = app.Notice{Kind: app.NoticeDaemonOutdated}
+	default:
+		dp.strandedBar.SetVisible(false)
+		return
+	}
+	dp.strandedLbl.SetText(noticeText(n))
+	dp.strandedLbl.SetVisible(true)
+	dp.removeBtn.SetVisible(installed)
+	dp.strandedBar.ShowAll()
+	dp.strandedBar.SetVisible(true)
+	if !installed {
+		// ShowAll() above would otherwise reveal it again — SetNoShowAll on
+		// the button only stops a ShowAll call on the button itself from
+		// being redundant, not one on an ancestor. See setElevationBarVisible
+		// in page_status.go for the same interaction.
+		dp.removeBtn.SetVisible(false)
+	}
 }
 
 // applyPrimary installs the service (not yet installed) or reinstalls it

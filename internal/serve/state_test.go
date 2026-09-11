@@ -10,10 +10,18 @@ import (
 
 // withConfigDir points os.UserConfigDir at a temp dir so tests never touch
 // the developer's real profiles.
+//
+// It isolates XDG_RUNTIME_DIR too, and that is not incidental: State.Reload
+// and the prober both publish the runtime state file, so any test that
+// builds a State and reloads it would otherwise write a bogus state.json
+// into the developer's live session — which the GUI and "proxy status" then
+// read as if a real daemon had published it. Every test in this package that
+// touches State must go through here.
 func withConfigDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	return filepath.Join(dir, "proxy-helper", "config.json")
 }
 

@@ -9,10 +9,18 @@ import (
 	"proxy-helper/internal/proxy"
 )
 
-func withRuntimeDir(t *testing.T) string {
+// runtimeDir returns the isolated XDG_RUNTIME_DIR that withConfigDir set.
+//
+// It does not set the variable itself: withConfigDir already isolates it —
+// State.Reload publishes, so every test touching a State needs that — and a
+// second t.Setenv here would silently override it, pointing the test at a
+// directory the code under test never writes to.
+func runtimeDir(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", dir)
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		t.Fatal("XDG_RUNTIME_DIR is not isolated; call withConfigDir first")
+	}
 	return dir
 }
 
@@ -21,7 +29,6 @@ func withRuntimeDir(t *testing.T) string {
 // the process — proxy status, the GUI switch — has to read it from
 // somewhere, and that somewhere is this file.
 func TestPublishAndReadRuntimeState(t *testing.T) {
-	withRuntimeDir(t)
 	path := withConfigDir(t)
 	writeConfig(t, path, `{"mode":"auto","active_profile":"corp","profiles":{
 		"corp":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
@@ -56,7 +63,6 @@ func TestPublishAndReadRuntimeState(t *testing.T) {
 // the verdict together, which is exactly the combination a caller reading
 // config.json alone would get wrong.
 func TestRuntimeStateForwardingReflectsDegradedAuto(t *testing.T) {
-	withRuntimeDir(t)
 	path := withConfigDir(t)
 	writeConfig(t, path, `{"mode":"auto","active_profile":"corp","profiles":{
 		"corp":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
@@ -81,7 +87,6 @@ func TestRuntimeStateForwardingReflectsDegradedAuto(t *testing.T) {
 
 // A strict pin keeps forwarding whatever the probe says.
 func TestRuntimeStateUpstreamPinStaysForwarding(t *testing.T) {
-	withRuntimeDir(t)
 	path := withConfigDir(t)
 	writeConfig(t, path, `{"mode":"upstream","active_profile":"corp","profiles":{
 		"corp":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
@@ -104,7 +109,7 @@ func TestRuntimeStateUpstreamPinStaysForwarding(t *testing.T) {
 // No file means no daemon. Readers must get that as an ordinary answer, not
 // an error to special-case at every call site.
 func TestReadRuntimeStateWithNoDaemon(t *testing.T) {
-	withRuntimeDir(t)
+	withConfigDir(t)
 
 	got, err := ReadRuntimeState()
 	if err != nil {
@@ -116,8 +121,8 @@ func TestReadRuntimeStateWithNoDaemon(t *testing.T) {
 }
 
 func TestPublishRuntimeStateOverwrites(t *testing.T) {
-	dir := withRuntimeDir(t)
 	path := withConfigDir(t)
+	dir := runtimeDir(t)
 	writeConfig(t, path, `{"mode":"auto","active_profile":"corp","profiles":{
 		"corp":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
 

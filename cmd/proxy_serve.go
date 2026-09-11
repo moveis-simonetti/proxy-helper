@@ -41,6 +41,7 @@ var proxyServeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		selfApplyUserTargets(logger, pf)
 		// Without an explicit --port, listen where the targets were told
 		// to look. Guessing 8888 here would silently strand a daemon
 		// installed on another port.

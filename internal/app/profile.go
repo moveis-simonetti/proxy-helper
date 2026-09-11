@@ -154,6 +154,10 @@ func Enable(d Deps, ex *proxy.Executor, name string, targetNames []string, viaLo
 	}
 
 	// Route 3.
+	// This route writes the upstream (credentials included) straight into
+	// every target — the "--no-via-local" path. The GUI never calls Enable
+	// with viaLocal=false; with targets always pointed at the daemon (see
+	// ApplyUserTargets), this is a script/CLI-only escape hatch now.
 	if !ex.DryRun {
 		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
 			lpf.ActiveProfile = name

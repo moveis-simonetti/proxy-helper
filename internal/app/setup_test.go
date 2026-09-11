@@ -153,8 +153,8 @@ func TestSetupHonoursAnExplicitMode(t *testing.T) {
 	}
 
 	pf, _ := proxy.LoadProfiles()
-	if pf.EffectiveMode() != proxy.ModeUpstream {
-		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeUpstream)
+	if pf.EffectiveMode() != proxy.ModeAuto {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeAuto)
 	}
 }
 

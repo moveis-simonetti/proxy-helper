@@ -105,11 +105,11 @@ func SaveProfile(d Deps, ex *proxy.Executor, resolve func(existing map[string]pr
 		if !existed && pf.ActiveProfile == "" && namedProfiles(pf.Profiles) == 1 {
 			pf.ActiveProfile = name
 			pf.LastProfile = name
-			// Upstream, not auto: this preserves exactly what selecting a
-			// profile used to mean here. Probing is something the user opts
-			// into, via "proxy setup" or "proxy mode auto" — it is not a
-			// behaviour to inherit by saving a profile.
-			pf.Mode = string(proxy.ModeUpstream)
+			// Auto, not upstream: with the targets always pointed at the
+			// daemon (see ApplyUserTargets/selfApplyUserTargets), there is
+			// no "legacy direct-write" behaviour left to preserve here —
+			// auto is simply the product's default routing.
+			pf.Mode = string(proxy.ModeAuto)
 		}
 
 		wasActive = pf.ActiveProfile == name

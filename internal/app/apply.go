@@ -215,6 +215,47 @@ func ApplyViaLocal(d Deps, ex *proxy.Executor, pf *proxy.ProfileFile, cfg proxy.
 	return rep, nil
 }
 
+// ApplyUserTargets points every target that never needs root at the local
+// daemon. It exists for the daemon's own startup: once proxy serve is
+// listening, every unprivileged tool on the machine should be able to reach
+// it without waiting for a person to run anything — no sudo prompt, so no
+// reason to gate it behind one.
+//
+// Unlike ApplyViaLocal, it does not check that a daemon is reachable (the
+// caller IS the daemon, mid-startup, and systemd may not have marked the
+// unit "active" yet) and it never touches a target whose Set needs root
+// (apt, system-env, dockerd, snap): those are the .deb postinst's job,
+// which already runs as root at install time. An unprivileged process
+// silently attempting them would just fail, or worse, prompt.
+func ApplyUserTargets(d Deps, ex *proxy.Executor, pf *proxy.ProfileFile) (*Report, error) {
+	all, err := d.ResolveTargets([]string{"all"})
+	if err != nil {
+		return nil, err
+	}
+	var targets []proxy.Target
+	var skipped []proxy.Target
+	for _, t := range all {
+		if !setNeedsRoot(t) {
+			targets = append(targets, t)
+		} else {
+			skipped = append(skipped, t)
+		}
+	}
+
+	port := pf.EffectiveLocalPort()
+	loopback := proxy.TargetConfig(proxy.Config{NoProxy: pf.EffectiveGlobalNoProxy()}, true, port)
+
+	rep := &Report{}
+	setEach(d, rep, ex, targets, func(proxy.Target) proxy.Config { return loopback })
+
+	// Record the privileged targets as skipped
+	for _, t := range skipped {
+		rep.Add(Result{Target: t.Name(), Outcome: OutcomeSkipped})
+	}
+
+	return rep, nil
+}
+
 // Clear removes the proxy settings from the named targets.
 //
 // Like Apply, Clear takes the profile lock itself (via

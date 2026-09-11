@@ -583,3 +583,52 @@ func TestClearViaLocalKeepsTheFlagOnAPartialRewrite(t *testing.T) {
 		t.Error("via_local foi limpo com uma seleção parcial — os demais alvos continuam encanados")
 	}
 }
+
+// ApplyUserTargets is what the daemon calls on its own startup: it must
+// reach every target that never needs root, and skip every one that does —
+// those are the .deb postinst's job, not something an unprivileged process
+// should attempt silently.
+func TestApplyUserTargetsSkipsPrivilegedTargets(t *testing.T) {
+	safe := &fakeTarget{name: "git", available: true}
+	privileged := &fakeTarget{name: "apt", available: true, root: true}
+	d := depsFor(safe, privileged)
+
+	pf := &proxy.ProfileFile{LocalPort: 9999}
+	rep, err := ApplyUserTargets(d, &proxy.Executor{}, pf)
+	if err != nil {
+		t.Fatalf("ApplyUserTargets: %v", err)
+	}
+
+	if len(safe.setCfgs) != 1 {
+		t.Errorf("safe target Set called %d times, want 1", len(safe.setCfgs))
+	}
+	if len(privileged.setCfgs) != 0 {
+		t.Errorf("privileged target Set called %d times, want 0", len(privileged.setCfgs))
+	}
+	got := safe.setCfgs[0]
+	if got.Host != "127.0.0.1" || got.Port != "9999" {
+		t.Errorf("target config = %+v, want the local daemon on port 9999", got)
+	}
+	// No credentials: the daemon holds the upstream, targets never see it.
+	if got.Username != "" || got.Password != "" {
+		t.Errorf("credentials leaked into the target: %+v", got)
+	}
+	if len(rep.Results) != 2 {
+		t.Errorf("Report has %d results, want 2 (one per target, including the skipped one)", len(rep.Results))
+	}
+}
+
+func TestApplyUserTargetsUsesGlobalNoProxy(t *testing.T) {
+	safe := &fakeTarget{name: "git", available: true}
+	d := depsFor(safe)
+	pf := &proxy.ProfileFile{LocalPort: 8888, GlobalNoProxy: []string{"localhost", "10.0.0.0/8"}}
+
+	if _, err := ApplyUserTargets(d, &proxy.Executor{}, pf); err != nil {
+		t.Fatalf("ApplyUserTargets: %v", err)
+	}
+	got := safe.setCfgs[0].NoProxy
+	want := []string{"localhost", "10.0.0.0/8"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("NoProxy = %v, want %v", got, want)
+	}
+}

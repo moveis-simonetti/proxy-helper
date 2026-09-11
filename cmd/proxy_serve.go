@@ -249,11 +249,11 @@ func nextStepHint(pf *proxy.ProfileFile) string {
 	switch len(names) {
 	case 0:
 		return "save a profile with \"proxy profile add <name> --host <host> --port <port>\", " +
-			"then run \"proxy set --profile <name> --via-local\" to point your targets at it"
+			"then run \"proxy set --profile <name>\" to point your targets at it"
 	case 1:
-		return fmt.Sprintf("run \"proxy set --profile %s --via-local\" to point your targets at it", names[0])
+		return fmt.Sprintf("run \"proxy set --profile %s\" to point your targets at it", names[0])
 	default:
-		return fmt.Sprintf("run \"proxy set --profile <name> --via-local\" to point your targets at it (profiles: %s)",
+		return fmt.Sprintf("run \"proxy set --profile <name>\" to point your targets at it (profiles: %s)",
 			strings.Join(names, ", "))
 	}
 }
@@ -268,7 +268,7 @@ var proxyServeUninstallCmd = &cobra.Command{
 		}
 		if !serveUninstallDry {
 			fmt.Println("removed " + serve.UnitName)
-			fmt.Println("note: targets configured with --via-local still point at the local proxy; run \"proxy set\" or \"proxy unset\" to change them")
+			fmt.Println("note: your targets still point at the local proxy; run \"proxy set\" or \"proxy unset\" to change them")
 		}
 		return nil
 	},

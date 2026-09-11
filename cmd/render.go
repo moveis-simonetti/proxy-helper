@@ -40,7 +40,7 @@ func renderNotice(w io.Writer, n app.Notice) {
 	case app.NoticeUnreachablePassword:
 		fmt.Fprintf(w, "  warning: this profile's password comes from %s, which only the local proxy reads.\n", n.Args["source"])
 		fmt.Fprintln(w, "           The targets below get a username with no password, so they will fail to authenticate.")
-		fmt.Fprintln(w, "           Use --via-local to keep the credential in one place (see \"proxy serve\").")
+		fmt.Fprintln(w, "           Drop --no-via-local to keep the credential in one place (see \"proxy serve\").")
 	case app.NoticeDockerLoopback:
 		fmt.Fprintf(w, "  note: %s will point at 127.0.0.1, which containers cannot reach.\n", n.Target)
 		fmt.Fprintln(w, "        Pulls will work, but build steps that need the network will fail.")

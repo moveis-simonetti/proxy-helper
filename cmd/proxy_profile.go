@@ -18,18 +18,19 @@ var proxyProfileCmd = &cobra.Command{
 }
 
 // refuseReserved blocks the reserved "_current" slot from being managed like
-// a user profile. It belongs to "proxy set --via-local", which rewrites it
-// wholesale, so editing or deleting it by hand only creates confusion.
+// a user profile. It belongs to ad-hoc "proxy set --host ..." runs, which
+// rewrite it wholesale, so editing or deleting it by hand only creates
+// confusion.
 func refuseReserved(name, verb string) error {
 	if name != proxy.CurrentProfileName {
 		return nil
 	}
-	return fmt.Errorf("%q is reserved for \"proxy set --via-local\" and cannot be %s; save a named profile instead", name, verb)
+	return fmt.Errorf("%q is reserved for ad-hoc \"proxy set --host ...\" runs and cannot be %s; save a named profile instead", name, verb)
 }
 
 // visibleProfileNames returns the profiles a user should see, sorted. The
-// reserved slot is an implementation detail of "proxy set --via-local", not
-// something the user saved, so it stays out of the listing.
+// reserved slot is an implementation detail of ad-hoc "proxy set --host ..."
+// runs, not something the user saved, so it stays out of the listing.
 func visibleProfileNames(pf *proxy.ProfileFile) []string {
 	names := make([]string, 0, len(pf.Profiles))
 	for name := range pf.Profiles {
@@ -225,9 +226,9 @@ var proxyProfileListCmd = &cobra.Command{
 // --- enable ---
 
 var (
-	profileEnableTargets  []string
-	profileEnableDryRun   bool
-	profileEnableViaLocal bool
+	profileEnableTargets    []string
+	profileEnableDryRun     bool
+	profileEnableNoViaLocal bool
 )
 
 var proxyProfileEnableCmd = &cobra.Command{
@@ -236,7 +237,7 @@ var proxyProfileEnableCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ex := &proxy.Executor{DryRun: profileEnableDryRun}
-		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, profileEnableViaLocal)
+		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, !profileEnableNoViaLocal)
 		if err != nil {
 			return err
 		}
@@ -307,7 +308,7 @@ func init() {
 
 	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableDryRun, "dry-run", false, "print what would change without applying it")
-	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableViaLocal, "via-local", false, "point targets at the local proxy (see \"proxy serve\") instead of writing the upstream and its credentials into every tool's config")
+	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableNoViaLocal, "no-via-local", false, "write the upstream and its credentials straight into every tool's config, instead of pointing them at the local proxy (see \"proxy serve\")")
 
 	proxyProfileDisableCmd.Flags().StringSliceVar(&profileDisableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
 	proxyProfileDisableCmd.Flags().BoolVar(&profileDisableDryRun, "dry-run", false, "print what would change without applying it")

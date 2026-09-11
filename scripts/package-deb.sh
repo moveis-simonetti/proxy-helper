@@ -145,16 +145,65 @@ docker run --rm \
 		# to be found; without this the menu entry shows a placeholder until
 		# something else happens to refresh it. Guarded on the tool existing
 		# so the package still installs on a system without GTK utilities.
-		cat > "$stage/DEBIAN/postinst" <<POSTINST
+		cat > "$stage/DEBIAN/postinst" <<\POSTINST
 #!/bin/sh
 set -e
+
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 	gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
 fi
 if command -v update-desktop-database >/dev/null 2>&1; then
 	update-desktop-database -q /usr/share/applications || true
 fi
+
+# From here on: point the machine at the local daemon before any user ever
+# opens the tool. The daemon itself starts in mode "direct" with no profile
+# selected — this is not "turn the proxy on", it is "make switching it on
+# later instant, for every user this machine ever gets".
+if command -v systemctl >/dev/null 2>&1; then
+	# Every future login of any user starts the daemon on its own — this
+	# is what makes "installed the .deb" and "daemon is up" the same fact
+	# for anyone who logs in after today, not just the user running this
+	# script.
+	systemctl --global enable proxy-helper.service || true
+
+	# Best effort for whoever is ALREADY logged in right now: a global
+	# enable only takes effect on the NEXT login. Failure here is not an
+	# error — the daemon still comes up the next time this user logs in.
+	for uid in $(loginctl list-sessions --no-legend 2>/dev/null | awk "{print \$2}" | sort -u); do
+		user="$(id -un "$uid" 2>/dev/null)" || continue
+		[ -n "$user" ] || continue
+		runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+			systemctl --user start proxy-helper.service 2>/dev/null || true
+	done
+fi
+
+# Privileged targets: written directly, since this script already runs as
+# root. No sudo prompt ever needed for these three, unlike everything else
+# proxy-helper touches.
+if command -v proxy-helper >/dev/null 2>&1; then
+	proxy-helper proxy set --targets apt,system-env,dockerd --host 127.0.0.1 --port 8888 --via-local || true
+fi
+
+exit 0
 POSTINST
+		cat > "$stage/DEBIAN/prerm" <<\PRERM
+#!/bin/sh
+set -e
+
+# $1 is "remove", "upgrade", "deconfigure", ... per the dpkg maintainer
+# script convention. Only "remove" (which also covers the "remove" step of
+# a later purge) should undo the privileged targets. On "upgrade" the
+# package is about to be replaced by a new version, not removed — undoing
+# the plumbing here would leave the machine with no working proxy for the
+# whole span of the upgrade.
+if [ "$1" = "remove" ] && command -v proxy-helper >/dev/null 2>&1; then
+	proxy-helper proxy unset --targets apt,system-env,dockerd || true
+fi
+
+exit 0
+PRERM
+		chmod 0755 "$stage/DEBIAN/prerm"
 		cat > "$stage/DEBIAN/postrm" <<POSTRM
 #!/bin/sh
 set -e

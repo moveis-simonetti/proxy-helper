@@ -74,13 +74,6 @@ func Setup(d Deps, ex *proxy.Executor, o SetupOptions) (*SetupResult, error) {
 		return nil, err
 	}
 
-	// For the first named profile, always use auto mode. With targets always
-	// pointed at the daemon, there is no "legacy direct-write" behaviour to
-	// preserve — auto is simply the product's default routing.
-	if namedProfiles(pf.Profiles) == 0 {
-		mode = proxy.ModeAuto
-	}
-
 	// Resolve the config before touching anything: an unknown profile with
 	// no connection details is a mistake, and finding out after installing
 	// a unit would leave the machine half set up.

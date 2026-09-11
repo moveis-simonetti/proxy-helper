@@ -259,16 +259,11 @@ func TestSameRowsIsTrueForTwoEmptyReads(t *testing.T) {
 // port until the user goes back to the Status page and applies again.
 // Silently, that surfaces later as "the proxy stopped working".
 func TestPortChangeStrandsTargets(t *testing.T) {
-	if !portChangeStrandsTargets(8888, 9090, true) {
-		t.Error("a port change with via-local on leaves every target on the old port; it must warn")
+	if !portChangeStrandsTargets(8888, 9090) {
+		t.Error("a port change leaves every target on the old port; it must warn")
 	}
-	if portChangeStrandsTargets(8888, 8888, true) {
+	if portChangeStrandsTargets(8888, 8888) {
 		t.Error("the port did not change, so nothing went stale")
-	}
-	// With via-local off the targets carry the upstream proxy directly and
-	// never referenced the daemon's port, so there is nothing to go stale.
-	if portChangeStrandsTargets(8888, 9090, false) {
-		t.Error("via-local is off; no target points at the daemon")
 	}
 }
 

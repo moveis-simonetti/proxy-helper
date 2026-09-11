@@ -613,7 +613,7 @@ func (dp *daemonPage) applyPrimary() {
 		// change".
 		var warning string
 		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-			if portChangeStrandsTargets(lpf.EffectiveLocalPort(), form.Port, lpf.ViaLocal) {
+			if portChangeStrandsTargets(lpf.EffectiveLocalPort(), form.Port) {
 				warning = staleTargetsWarning(lpf.EffectiveLocalPort(), form.Port)
 			}
 			lpf.LocalPort = form.Port

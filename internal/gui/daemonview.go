@@ -182,11 +182,8 @@ func sameRows(a, b []logRow) bool {
 // own selection. So every target keeps the old port until the user applies
 // again, and the failure shows up later, detached from the change that
 // caused it. This is what the warning is for.
-//
-// With via-local off, the targets carry the upstream proxy directly and
-// never referenced the daemon's port, so nothing goes stale.
-func portChangeStrandsTargets(oldPort, newPort int, viaLocal bool) bool {
-	return viaLocal && oldPort != newPort
+func portChangeStrandsTargets(oldPort, newPort int) bool {
+	return oldPort != newPort
 }
 
 // staleTargetsWarning explains the situation portChangeStrandsTargets

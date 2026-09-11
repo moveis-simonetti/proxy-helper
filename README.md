@@ -198,7 +198,7 @@ proxy-helper proxy profile list
 # Habilitar um perfil: aplica aos targets e marca como ativo
 # (só um perfil fica ativo por vez)
 proxy-helper proxy profile enable trabalho
-# Com o encanamento do "proxy serve" montado (--via-local), esse mesmo
+# Com o encanamento do "proxy serve" montado, esse mesmo
 # comando não toca em target nenhum: só troca o perfil ativo e recarrega
 # o daemon. Veja "Proxy local" abaixo.
 
@@ -245,7 +245,7 @@ Isso separa duas coisas que hoje ficam misturadas:
 |---|---|---|---|
 | Montar tudo de uma vez | `proxy setup --host … --port …` | uma vez | sim |
 | (ou, passo a passo) instalar o serviço | `proxy serve install` | uma vez | não |
-| (…) apontar os targets para ele | `proxy set --host … --via-local` | uma vez | sim |
+| (…) apontar os targets para ele | `proxy set --host …` (é o padrão) | uma vez | sim |
 | Trocar o modo de roteamento | `proxy mode auto\|upstream\|direct` | diário | não |
 | Desligar o proxy | `proxy off` (= `proxy mode direct`) | diário | não |
 | Religar | `proxy on` | diário | não |
@@ -273,10 +273,11 @@ instala e sobe o daemon, aponta todos os targets para ele e deixa o modo em
 `--dry-run` mostra o plano inteiro sem mexer em nada.
 
 Ele existe porque esse arranjo antes se montava à mão com três comandos na
-ordem certa, sendo que a flag `--via-local` do segundo é o detalhe que
-ninguém descobre sozinho. Sem ela, o liga/desliga do dia a dia continua
-reescrevendo treze targets e pedindo senha — exatamente o que apontar os
-targets para o daemon existe para evitar.
+ordem certa. Hoje `proxy set`/`proxy profile enable` já apontam pro daemon
+por padrão — o detalhe que antes ninguém descobria sozinho virou o
+comportamento normal —, mas `proxy setup` continua sendo o jeito de instalar
+o serviço e montar tudo numa tacada só, sem precisar lembrar da ordem dos
+três comandos.
 
 ```
 proxy-helper proxy setup --host 10.0.0.5 --port 8080 --profile trabalho
@@ -344,7 +345,7 @@ proxy-helper proxy setup --host 10.0.0.5 --port 8080 --profile trabalho
 
 # (equivale a fazer isto na mão, na ordem certa)
 proxy-helper proxy serve install
-proxy-helper proxy set --profile trabalho --via-local
+proxy-helper proxy set --profile trabalho
 
 # No dia a dia, sem sudo
 proxy-helper proxy off                     # tudo direto (= proxy mode direct)
@@ -357,13 +358,17 @@ proxy-helper proxy profile enable trabalho # idem, via profile
 proxy-helper proxy unset --targets ...
 ```
 
-`proxy set --via-local` (e `proxy profile enable --via-local`) recusam
-rodar se o daemon não estiver instalado e ativo, e dizem exatamente o que
-rodar (`proxy serve install`). `proxy serve uninstall` remove o serviço.
+Por padrão (sem `--no-via-local`), `proxy set` e `proxy profile enable`
+recusam rodar se o daemon não estiver instalado e ativo, e dizem exatamente
+o que rodar (`proxy serve install`). Quem não roda o daemon usa
+`--no-via-local` como escape hatch: volta ao comportamento antigo, gravando
+a credencial direto em cada target. `proxy serve uninstall` remove o
+serviço.
 
 A porta padrão é 8888. Para usar outra, passe `--port` no
 `proxy serve install`: ela fica gravada em `local_port` no `config.json`, e
-tanto `--via-local` quanto o `proxy status` passam a usar essa porta.
+tanto o roteamento via daemon (o padrão) quanto o `proxy status` passam a
+usar essa porta.
 `proxy unset` (de todos os targets) desfaz o encanamento; um `unset`
 parcial, de alguns targets só, mantém o aviso — os outros ainda apontam
 pro loopback.
@@ -468,9 +473,9 @@ não aparecem na tabela — ela é só de requisições. Eles continuam no
 ### Docker e containers
 
 Containers **não alcançam o `127.0.0.1` do host** — lá dentro, `127.0.0.1` é o
-próprio container. Isso torna o `--via-local` parcialmente quebrado para
-Docker, e de um jeito confuso: `docker pull` funciona (o `dockerd` roda no
-host), mas todo `RUN` do build que precise de rede morre com
+próprio container. Isso torna o roteamento via daemon parcialmente quebrado
+para Docker, e de um jeito confuso: `docker pull` funciona (o `dockerd` roda
+no host), mas todo `RUN` do build que precise de rede morre com
 `Failed to connect to 127.0.0.1 port 8888`.
 
 A saída é `--docker-bridge`, que faz o daemon escutar **também** no gateway da
@@ -478,7 +483,7 @@ bridge do Docker:
 
 ```bash
 proxy-helper proxy serve install --docker-bridge
-proxy-helper proxy set --profile trabalho --via-local
+proxy-helper proxy set --profile trabalho
 sudo systemctl restart docker
 ```
 
@@ -494,8 +499,8 @@ arranque, e é o passo que mais se esquece.
 > rede local, só aos containers. Por isso é opt-in, o daemon recusa escutar em
 > qualquer endereço publicamente roteável, e loga um aviso no arranque.
 
-Sem a flag, o `proxy set --via-local` avisa que os builds vão falhar em vez de
-deixar você descobrir no meio de um deploy.
+Sem a flag `--docker-bridge`, o `proxy set` avisa que os builds vão falhar em
+vez de deixar você descobrir no meio de um deploy.
 
 #### Node.js dentro de containers
 
@@ -531,9 +536,10 @@ do Node, então serve como solução única para quem mantém imagens variadas.
 
 ### Modo de falha
 
-Se o serviço parar com o encanamento ativo (`--via-local`), tudo que
-depende do proxy passa a falhar com `connection refused`, porque os
-targets continuam apontando pro loopback e não há mais nada escutando lá.
+Se o serviço parar com o encanamento ativo (o caso comum, já que é o
+padrão), tudo que depende do proxy passa a falhar com `connection refused`,
+porque os targets continuam apontando pro loopback e não há mais nada
+escutando lá.
 `proxy status` avisa isso no topo da saída:
 
 ```

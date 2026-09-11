@@ -56,6 +56,10 @@ func renderNotice(w io.Writer, n app.Notice) {
 		fmt.Fprintln(w, "           Until the daemon is back, this machine has no network access at all.")
 		fmt.Fprintln(w, "           Restart it:  systemctl --user restart proxy-helper.service")
 		fmt.Fprintln(w, "           Or take the targets off it:  proxy-helper proxy unset --targets all")
+	case app.NoticeDaemonOutdated:
+		fmt.Fprintln(w, "  WARNING: the running daemon is an older build than the one installed.")
+		fmt.Fprintln(w, "           It ignores the routing mode, so switching it has no effect at all.")
+		fmt.Fprintln(w, "           Restart it:  systemctl --user restart proxy-helper.service")
 	case app.NoticeNeedsSudo:
 		fmt.Fprintf(w, "  note: %s needs sudo, you may be prompted for your password\n", n.Target)
 	case app.NoticeProfileAlreadyPlumbed:

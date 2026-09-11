@@ -33,12 +33,18 @@ var proxyStatusCmd = &cobra.Command{
 		// to bind. A daemon that lost its port is active and useless, and
 		// with every target pointing at it that is a machine with no
 		// network — the one thing worth saying before anything else.
-		health := app.CheckDaemon(pf, serve.ListeningAddrs)
+		health := app.CheckDaemon(pf, app.LiveDaemonChecks())
 		if health.Stranded() {
 			renderNotice(stdout(), app.Notice{
 				Kind: app.NoticeDaemonStranded,
 				Args: map[string]string{"port": fmt.Sprint(health.Port)},
 			})
+			fmt.Println()
+		}
+		// Outdated is quieter than stranded but just as silent a failure:
+		// the toggles all appear to work and none of them do.
+		if health.Outdated() {
+			renderNotice(stdout(), app.Notice{Kind: app.NoticeDaemonOutdated})
 			fmt.Println()
 		}
 

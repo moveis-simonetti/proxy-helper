@@ -483,7 +483,7 @@ func (sp *statusPage) load() {
 			// Probed here, inside the runner job: ListeningAddrs dials, and
 			// on a loaded machine that can cost a few hundred milliseconds
 			// — never on the GTK thread.
-			health = app.CheckDaemon(pf, serve.ListeningAddrs)
+			health = app.CheckDaemon(pf, app.LiveDaemonChecks())
 		}
 		return func() {
 			sp.applyViaLocal(viaLocal)
@@ -618,14 +618,20 @@ func newStrandedBar() (*gtk.InfoBar, *gtk.Label, error) {
 // setStrandedVisible shows or hides the no-daemon warning. Like the
 // elevation bar, the label must be shown explicitly every time.
 func (sp *statusPage) setStrandedVisible(h app.DaemonHealth) {
-	if !h.Stranded() {
+	var n app.Notice
+	switch {
+	case h.Stranded():
+		n = app.Notice{
+			Kind: app.NoticeDaemonStranded,
+			Args: map[string]string{"port": fmt.Sprint(h.Port)},
+		}
+	case h.Outdated():
+		n = app.Notice{Kind: app.NoticeDaemonOutdated}
+	default:
 		sp.strandedBar.SetVisible(false)
 		return
 	}
-	sp.strandedLbl.SetText(noticeText(app.Notice{
-		Kind: app.NoticeDaemonStranded,
-		Args: map[string]string{"port": fmt.Sprint(h.Port)},
-	}))
+	sp.strandedLbl.SetText(noticeText(n))
 	sp.strandedLbl.SetVisible(true)
 	sp.strandedBar.ShowAll()
 	sp.strandedBar.SetVisible(true)

@@ -112,6 +112,10 @@ func noticeText(n app.Notice) string {
 				"Reinicie o serviço na aba Daemon, ou remova os alvos com "+
 				"\"proxy unset --targets all\".",
 			n.Args["port"])
+	case app.NoticeDaemonOutdated:
+		return "O proxy local em execução é uma versão anterior à instalada. " +
+			"Ele ignora o modo de roteamento, então trocá-lo não tem efeito nenhum. " +
+			"Reinicie o serviço na aba Daemon."
 	default:
 		return fmt.Sprintf("aviso desconhecido para %s", n.Target)
 	}

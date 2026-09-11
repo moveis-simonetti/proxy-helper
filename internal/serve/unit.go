@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"proxy-helper/internal/proxy"
 )
@@ -97,6 +99,24 @@ func DaemonActive() bool {
 		return false
 	}
 	return exec.Command("systemctl", "--user", "is-active", "--quiet", UnitName).Run() == nil
+}
+
+// DaemonMainPID reports the PID systemd has for the unit, or 0 when there is
+// no systemd, no unit, or nothing running. Callers use it to tell the daemon
+// that IS running from whatever a stale file claims.
+func DaemonMainPID() int {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return 0
+	}
+	out, err := exec.Command("systemctl", "--user", "show", "-p", "MainPID", "--value", UnitName).Output()
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return pid
 }
 
 // ReloadDaemon asks a running daemon to re-read its config. It is a no-op

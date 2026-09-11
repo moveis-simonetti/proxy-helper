@@ -31,6 +31,10 @@ type RuntimeState struct {
 	// daemon is really doing with traffic. This is the field a UI wants.
 	Forwarding bool `json:"forwarding"`
 	Port       int  `json:"port,omitempty"`
+	// PID identifies the process that wrote this. A reader compares it with
+	// systemd's MainPID: a file left behind by a killed daemon, or written
+	// by a build that is no longer the one running, names a different PID.
+	PID int `json:"pid,omitempty"`
 }
 
 // runtimeStatePath is under XDG_RUNTIME_DIR on purpose: the file describes a
@@ -58,6 +62,7 @@ func (s *State) PublishRuntimeState() error {
 		UpstreamAddr:      snap.upstreamAddr,
 		UpstreamReachable: s.reachable.Load(),
 		Port:              int(s.port.Load()),
+		PID:               os.Getpid(),
 	}
 	// Resolved the same way Router() resolves it, so the file can never
 	// disagree with what the request path is actually doing.

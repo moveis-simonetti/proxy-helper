@@ -69,6 +69,10 @@ const (
 	// that is not answering, which leaves the machine with no network at
 	// all. Args carry "port".
 	NoticeDaemonStranded
+	// NoticeDaemonOutdated warns that the running daemon is not the build
+	// that is installed, so config changes reach a process that cannot act
+	// on them.
+	NoticeDaemonOutdated
 
 	// NumNoticeKinds is the number of NoticeKind values defined above. Kept
 	// right next to the iota block so it tracks it automatically; a

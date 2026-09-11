@@ -355,6 +355,15 @@ func (t *tray) applyProfiles(pf *proxy.ProfileFile, err error) {
 // own click. Every item is destroyed and recreated on each call — cheap
 // for the handful of profiles this menu will ever hold — because gotk3
 // gives no cheaper way to relabel a GtkMenu's children in place.
+// State-setting and signal-connecting are two separate passes, for the same
+// reason rebuildModeMenu's are: GTK makes the first item of a brand new
+// radio group active by default regardless of which name is actually
+// active, and this menu's "activate" handler has no guard at all against
+// that — with more than one saved profile, rebuilding this menu while a
+// later-listed profile was the real one would fire trySwitch on the first
+// name in the list the moment its widget was created. A single saved
+// profile hid this until now: the first (only) item was always the correct
+// one by coincidence.
 func (t *tray) rebuildProfileMenu(names []string, active string) {
 	t.profileMenu.GetChildren().Foreach(func(item interface{}) {
 		if w, ok := item.(*gtk.Widget); ok {
@@ -364,6 +373,7 @@ func (t *tray) rebuildProfileMenu(names []string, active string) {
 
 	t.profileItem.SetSensitive(len(names) > 0)
 
+	items := make([]*gtk.RadioMenuItem, 0, len(names))
 	var group *gtk.RadioMenuItem
 	for _, name := range names {
 		item, err := gtk.RadioMenuItemNewWithLabelFromWidget(group, name)
@@ -371,12 +381,23 @@ func (t *tray) rebuildProfileMenu(names []string, active string) {
 			continue
 		}
 		group = item
-		if name == active {
-			item.SetActive(true)
+		items = append(items, item)
+	}
+
+	for i, name := range names {
+		if i >= len(items) {
+			break
+		}
+		items[i].SetActive(name == active)
+	}
+
+	for i, name := range names {
+		if i >= len(items) {
+			break
 		}
 		n := name
-		item.Connect("activate", func() { t.trySwitch(n) })
-		t.profileMenu.Append(item)
+		items[i].Connect("activate", func() { t.trySwitch(n) })
+		t.profileMenu.Append(items[i])
 	}
 
 	// New items are born hidden (no-show-all does not apply to a plain
@@ -408,6 +429,20 @@ func (t *tray) trySetMode(m proxy.Mode) {
 // rebuildModeMenu repopulates the "Modo" submenu, marking the active mode.
 // Same destroy-and-recreate shape as rebuildProfileMenu — see its comment
 // for why that is cheap enough and why RadioMenuItem is the right widget.
+//
+// State-setting and signal-connecting are two separate passes over the
+// items, and that split is load-bearing, not style: GTK makes the FIRST
+// item of a brand new radio group active by default, regardless of which
+// mode is actually in force. With "Automático" first in the list, rebuilding
+// the menu while the real mode was "upstream" or "direct" made that first
+// item come up checked and fire "activate" on its own, during construction
+// — and the old per-item guard (skip when this item's mode already equals
+// the target mode) could not catch it, because the item firing was Auto
+// while the target was something else. That silently wrote mode=auto back
+// to disk moments after the user had just switched away from it — the
+// "toggles the checkbox and it snaps back" bug. Settling every item's real
+// active state before any "activate" handler exists closes that off: there
+// is no window left in which a not-yet-correct default can fire anything.
 func (t *tray) rebuildModeMenu(active proxy.Mode) {
 	t.modeMenu.GetChildren().Foreach(func(item interface{}) {
 		if w, ok := item.(*gtk.Widget); ok {
@@ -415,34 +450,50 @@ func (t *tray) rebuildModeMenu(active proxy.Mode) {
 		}
 	})
 
-	var group *gtk.RadioMenuItem
-	for _, m := range []struct {
+	defs := []struct {
 		mode  proxy.Mode
 		label string
 	}{
 		{proxy.ModeAuto, "Automático"},
 		{proxy.ModeUpstream, "Sempre pelo proxy"},
 		{proxy.ModeDirect, "Direto"},
-	} {
-		item, err := gtk.RadioMenuItemNewWithLabelFromWidget(group, m.label)
+	}
+
+	items := make([]*gtk.RadioMenuItem, 0, len(defs))
+	var group *gtk.RadioMenuItem
+	for _, d := range defs {
+		item, err := gtk.RadioMenuItemNewWithLabelFromWidget(group, d.label)
 		if err != nil {
 			continue
 		}
 		group = item
-		if m.mode == active {
-			item.SetActive(true)
+		items = append(items, item)
+	}
+
+	// Pass 1: every item's active state, before any signal is wired.
+	for i, d := range defs {
+		if i >= len(items) {
+			break
 		}
-		mode := m.mode
-		item.Connect("activate", func() {
+		items[i].SetActive(d.mode == active)
+	}
+
+	// Pass 2: signals, now that no further SetActive call will disturb them.
+	for i, d := range defs {
+		if i >= len(items) {
+			break
+		}
+		mode := d.mode
+		items[i].Connect("activate", func() {
 			// Activating the already-active item is GTK reasserting the
 			// radio state, not a user choice; acting on it would SIGHUP
-			// the daemon on every menu rebuild.
+			// the daemon for nothing.
 			if mode == active {
 				return
 			}
 			t.trySetMode(mode)
 		})
-		t.modeMenu.Append(item)
+		t.modeMenu.Append(items[i])
 	}
 	t.modeMenu.ShowAll()
 }

@@ -182,7 +182,7 @@ fi
 # root. No sudo prompt ever needed for these three, unlike everything else
 # proxy-helper touches.
 if command -v proxy-helper >/dev/null 2>&1; then
-	proxy-helper proxy set --targets apt,system-env,dockerd --host 127.0.0.1 --port 8888 --via-local || true
+	proxy-helper proxy set --targets apt,system-env,dockerd --host 127.0.0.1 --port 8888 || true
 fi
 
 exit 0

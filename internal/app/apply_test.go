@@ -618,6 +618,33 @@ func TestApplyUserTargetsSkipsPrivilegedTargets(t *testing.T) {
 	}
 }
 
+func TestApplyUserTargetsUsesDockerBridge(t *testing.T) {
+	dockerConfig := &fakeTarget{name: "docker-config", available: true}
+	other := &fakeTarget{name: "git", available: true}
+	d := depsFor(dockerConfig, other)
+
+	pf := &proxy.ProfileFile{LocalPort: 9999, DockerBridge: true}
+	if _, err := ApplyUserTargets(d, &proxy.Executor{}, pf); err != nil {
+		t.Fatalf("ApplyUserTargets: %v", err)
+	}
+
+	if len(dockerConfig.setCfgs) != 1 {
+		t.Fatalf("docker-config Set called %d times, want 1", len(dockerConfig.setCfgs))
+	}
+	got := dockerConfig.setCfgs[0]
+	if got.Host != "172.17.0.1" || got.Port != "9999" {
+		t.Errorf("docker-config target config = %+v, want the bridge address on port 9999", got)
+	}
+
+	if len(other.setCfgs) != 1 {
+		t.Fatalf("git Set called %d times, want 1", len(other.setCfgs))
+	}
+	gotOther := other.setCfgs[0]
+	if gotOther.Host != "127.0.0.1" || gotOther.Port != "9999" {
+		t.Errorf("git target config = %+v, want loopback on port 9999", gotOther)
+	}
+}
+
 func TestApplyUserTargetsUsesGlobalNoProxy(t *testing.T) {
 	safe := &fakeTarget{name: "git", available: true}
 	d := depsFor(safe)

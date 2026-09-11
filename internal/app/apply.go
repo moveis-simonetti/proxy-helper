@@ -243,10 +243,30 @@ func ApplyUserTargets(d Deps, ex *proxy.Executor, pf *proxy.ProfileFile) (*Repor
 	}
 
 	port := pf.EffectiveLocalPort()
-	loopback := proxy.TargetConfig(proxy.Config{NoProxy: pf.EffectiveGlobalNoProxy()}, true, port)
+	cfg := proxy.Config{NoProxy: pf.EffectiveGlobalNoProxy()}
+	loopback := proxy.TargetConfig(cfg, true, port)
 
 	rep := &Report{}
-	setEach(d, rep, ex, targets, func(proxy.Target) proxy.Config { return loopback })
+
+	// Same reasoning as ApplyViaLocal: docker-config is read from inside
+	// containers, where 127.0.0.1 is the container itself, not the host.
+	dockerCfg := loopback
+	if pf.DockerBridge {
+		bridge, err := d.BridgeAddr()
+		if err != nil {
+			return nil, fmt.Errorf("docker_bridge is enabled but the bridge is unusable: %w", err)
+		}
+		dockerCfg = proxy.TargetConfigAt(cfg, true, port, bridge)
+	} else {
+		noticeDockerLoopback(d, rep, targets)
+	}
+
+	setEach(d, rep, ex, targets, func(t proxy.Target) proxy.Config {
+		if serve.IsDockerTarget(t.Name()) {
+			return dockerCfg
+		}
+		return loopback
+	})
 
 	// Record the privileged targets as skipped
 	for _, t := range skipped {

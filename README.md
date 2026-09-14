@@ -75,6 +75,9 @@ separada por vírgula (ou `all`, o padrão):
 - `lxd` — o daemon do LXD, via `lxc config`
 - `snap`
 - `apt`
+- `nm-connectivity` — a checagem de conectividade do NetworkManager (veja
+  abaixo); exige `sudo`, e só faz algo se `connectivity_check_url` estiver
+  configurado no perfil
 
 Targets não disponíveis no sistema atual (ex: `gnome` fora de uma sessão
 GNOME, `kde` fora do Plasma, `snap`/`lxd` onde o pacote correspondente não
@@ -139,6 +142,50 @@ exemplo, é tratado pelo target `dockerd`).
 (usado por GNOME Software/Discover) quando presente, contornando um bug
 onde ele mantém o proxy antigo mesmo depois do proxy do sistema ser
 desligado; isso pode pedir sudo mesmo sem `snap`/`apt` no `--targets`.
+
+### `nm-connectivity` e o ícone de "conectividade limitada"
+
+Numa rede que só sai por proxy, o NetworkManager mostra "conectividade
+limitada" mesmo com tudo funcionando: a checagem de conectividade dele
+(`nmcli general status`) faz uma requisição HTTP direta, sem proxy, e não
+tem nenhum jeito de configurar um proxy para ela — nem por
+`NetworkManager.conf`, nem pelas configurações de proxy por conexão
+(`proxy.method`/`proxy.pac-script`, que servem só para distribuir a config a
+outros consumidores via D-Bus, não para a própria checagem do NetworkManager
+usar). Testado e confirmado nesta sessão.
+
+A única correção real é apontar a checagem para algo que a rede em questão
+responda **sem** proxy — o que é sempre específico de cada rede (não dá para
+descobrir isso automaticamente). Se você tiver algo assim (por exemplo, o
+próprio host do proxy respondendo em uma porta sem passar pelo túnel de
+proxy), configure no perfil:
+
+```
+proxy profile edit "Escritório Simonetti" \
+  --connectivity-check-url "http://192.168.111.70/" \
+  --connectivity-check-response "<html>"
+```
+
+`--connectivity-check-response` precisa bater com o **início** do corpo da
+resposta (é assim que o NetworkManager decide sucesso/falha). Depois de
+configurar, rode `proxy profile enable "Escritório Simonetti"` (editar o
+perfil sozinho não reaplica os targets) para escrever
+`/etc/NetworkManager/conf.d/95-proxy-helper-connectivity.conf` e recarregar o
+NetworkManager.
+
+Sem `connectivity_check_url` configurado (o padrão), esse target não faz
+nada — nenhum `sudo`, nenhum arquivo escrito.
+
+**É específico da rede, não da máquina.** A URL só responde sem proxy
+*naquela* rede; em qualquer outra (casa, hotspot, outro escritório), a
+checagem vai falhar de novo e o ícone volta a mostrar "limitada" — mesmo com
+internet de verdade — porque a configuração continua apontando para uma URL
+que só existe na rede antiga. Não tem como isso ser automático: se você usa
+mais de uma rede que precisa de proxy, configure
+`--connectivity-check-url`/`--connectivity-check-response` em cada perfil
+correspondente, e troque de perfil (`proxy profile enable <nome>`, não só
+`proxy set`) ao trocar de rede — trocar de perfil já limpa a checagem
+antiga automaticamente, mesmo que o novo perfil não configure uma própria.
 
 ## Uso pontual
 

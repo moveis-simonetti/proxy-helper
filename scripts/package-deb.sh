@@ -18,6 +18,13 @@
 # from the oldest base we build on. Building the package on 22.04 also makes
 # dpkg-shlibdeps emit version floors that Mint 21 can satisfy.
 #
+# The apt packages and the Go toolchain live in a prebuilt image
+# (scripts/deb-build-image), not inline here — a throwaway --rm container
+# used to apt-get/curl all of that on every single run. GOCACHE (this
+# script's own, real one — see "go env GOCACHE" below) is mounted for the
+# same reason GOMODCACHE already was: a CGO+gui build recompiling GTK
+# bindings from scratch every time was most of what made this slow.
+#
 # Usage:
 #   scripts/package-deb.sh
 #   VERSION=1.2.3 BASE_IMAGE=ubuntu:20.04 scripts/package-deb.sh
@@ -61,34 +68,42 @@ VERSION="${VERSION#v}"
 
 mkdir -p dist
 GOMODCACHE="$(go env GOMODCACHE)"
+GOCACHE="$(go env GOCACHE)"
 
 echo "base image : $BASE_IMAGE"
 echo "version    : $VERSION"
 echo "arch       : $DEB_ARCH"
 
+# Built once, reused every run after: apt-get and the Go toolchain download
+# used to happen inside a throwaway --rm container on every single build.
+# Docker's layer cache makes this a no-op (a few hundred ms) unless
+# BASE_IMAGE, GO_VERSION, or scripts/deb-build-image/Dockerfile changed —
+# see that file's doc comment.
+IMAGE_TAG="proxy-helper-deb-build:${BASE_IMAGE//[:\/]/-}-go${GO_VERSION}"
+docker build \
+	--build-arg "BASE_IMAGE=$BASE_IMAGE" \
+	--build-arg "GO_VERSION=$GO_VERSION" \
+	-t "$IMAGE_TAG" \
+	scripts/deb-build-image >/dev/null
+
 docker run --rm \
 	-v "$PWD:/src" \
 	-v "$GOMODCACHE:/gomodcache" \
+	-v "$GOCACHE:/gocache" \
 	-w /src \
-	-e "GO_VERSION=$GO_VERSION" \
 	-e "VERSION=$VERSION" \
 	-e "DEB_ARCH=$DEB_ARCH" \
 	-e "HOST_UID=$(id -u)" \
 	-e "HOST_GID=$(id -g)" \
-	"$BASE_IMAGE" \
+	"$IMAGE_TAG" \
 	bash -euo pipefail -c '
-		export DEBIAN_FRONTEND=noninteractive
-		apt-get update -qq
-		apt-get install -y -qq --no-install-recommends \
-			ca-certificates curl build-essential pkg-config dpkg-dev \
-			desktop-file-utils librsvg2-bin \
-			libgtk-3-dev libayatana-appindicator3-dev >/dev/null
-
-		arch="$(dpkg --print-architecture)"
-		curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
-			| tar -C /usr/local -xz
-		export PATH=/usr/local/go/bin:$PATH
 		export GOMODCACHE=/gomodcache
+		# The same real build cache "go build" already uses on the host —
+		# mounted here for the same reason GOMODCACHE is: a CGO+gui build
+		# recompiling GTK bindings from scratch on every run was most of
+		# what made this script slow. Content-addressed by source+flags, so
+		# sharing it with host-side non-cgo/non-gui builds is safe.
+		export GOCACHE=/gocache
 		export GOFLAGS=-buildvcs=false
 		export CGO_ENABLED=1
 

@@ -156,6 +156,24 @@ docker run --rm \
 				-o "$icons/${size}x${size}/apps/proxy-helper.png"
 		done
 
+		# The systemd --user unit, shipped so "systemctl --global enable" in
+		# postinst has something to find: InstallUnit (internal/serve/unit.go)
+		# only ever writes a PER-USER copy, under that user'"'"'s own
+		# $XDG_CONFIG_HOME — nothing before this wrote a copy anywhere a
+		# --global enable can see, so it failed with "Unit ... does not
+		# exist" even though it was wrapped in "|| true" and looked like it
+		# worked. No --port/--docker-bridge baked into ExecStart, unlike
+		# RenderUnit'"'"'s per-user copy: "proxy serve" already reads
+		# EffectiveLocalPort()/DockerBridge from config.json itself when
+		# those flags are absent (cmd/proxy_serve.go), so one generic unit
+		# serves every port/bridge configuration without regenerating a
+		# unit file for each. A user who later runs "proxy serve
+		# install"/the GUI'"'"'s Salvar still gets InstallUnit'"'"'s per-user
+		# copy, which systemd prefers over this one — same override order
+		# every other systemd user unit follows.
+		mkdir -p "$stage/usr/lib/systemd/user"
+		cp packaging/proxy-helper.service "$stage/usr/lib/systemd/user/"
+
 		# The icon theme cache has to be rebuilt for a newly installed icon
 		# to be found; without this the menu entry shows a placeholder until
 		# something else happens to refresh it. Guarded on the tool existing
@@ -185,9 +203,15 @@ if command -v systemctl >/dev/null 2>&1; then
 	# Best effort for whoever is ALREADY logged in right now: a global
 	# enable only takes effect on the NEXT login. Failure here is not an
 	# error — the daemon still comes up the next time this user logs in.
+	#
+	# daemon-reload first: dpkg just dropped a new unit file on disk, and a
+	# systemd --user manager that was already running before this install
+	# has no reason to have noticed it yet.
 	for uid in $(loginctl list-sessions --no-legend 2>/dev/null | awk "{print \$2}" | sort -u); do
 		user="$(id -un "$uid" 2>/dev/null)" || continue
 		[ -n "$user" ] || continue
+		runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+			systemctl --user daemon-reload 2>/dev/null || true
 		runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
 			systemctl --user start proxy-helper.service 2>/dev/null || true
 	done
@@ -195,9 +219,14 @@ fi
 
 # Privileged targets: written directly, since this script already runs as
 # root. No sudo prompt ever needed for these three, unlike everything else
-# proxy-helper touches.
+# proxy-helper touches. --no-via-local: this runs before the daemon is
+# necessarily up (systemctl --user start above is best-effort, and even
+# --global enable only takes effect on the NEXT login) — via-local
+# is the CLI default now, and without --no-via-local this would refuse with
+# "the local proxy is not running" instead of just pointing these three at
+# the loopback address the daemon will be listening on once it does start.
 if command -v proxy-helper >/dev/null 2>&1; then
-	proxy-helper proxy set --targets apt,system-env,dockerd --host 127.0.0.1 --port 8888 || true
+	proxy-helper proxy set --targets apt,system-env,dockerd --host 127.0.0.1 --port 8888 --no-via-local || true
 fi
 
 exit 0

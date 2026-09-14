@@ -1,0 +1,17 @@
+[Unit]
+Description=proxy-helper local forward proxy
+Documentation=https://github.com/gilbert/proxy-helper
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/proxy-helper proxy serve
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=2
+# The daemon binds loopback only and needs no privileges.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

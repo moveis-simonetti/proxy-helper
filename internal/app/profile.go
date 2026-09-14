@@ -104,9 +104,11 @@ type EnableResult struct {
 //     profile's NAME as active. Not the reserved "_current" copy, which would
 //     go stale the moment the profile is edited.
 //  2. The plumbing is already in place (pf.ViaLocal): the targets already
-//     reach the daemon, so this is pure state. Writing to a target here would
-//     tear the plumbing down and put the upstream credential into every
-//     tool's config file.
+//     reach the daemon, so this is pure state. Writing to a proxy-URL target
+//     here would tear the plumbing down and put the upstream credential into
+//     every tool's config file — with one deliberate exception: nm-
+//     connectivity's content is the profile's own, not the daemon's address,
+//     so it still gets reapplied here when configured (see the route body).
 //  3. Otherwise: record the activation BEFORE touching any target. Targets
 //     fail for mundane reasons, and returning early used to leave the machine
 //     with every target configured but no active profile.
@@ -150,7 +152,39 @@ func Enable(d Deps, ex *proxy.Executor, name string, targetNames []string, viaLo
 		if err := d.ReloadDaemon(ex); err != nil {
 			return EnableResult{}, err
 		}
-		return EnableResult{TargetsUntouched: true}, nil
+		// nm-connectivity is not "pure state" the way every other target is
+		// here: the others just point at the local daemon regardless of
+		// which profile is active, so re-writing them would be redundant at
+		// best (Set with the wrong cfg would be actively harmful — see the
+		// comment on Enable). nm-connectivity's correct content DOES depend
+		// on which profile is active (it is the profile's own
+		// ConnectivityCheckURL/Response), so switching profiles has to
+		// reapply it even on this otherwise-untouched route — including
+		// switching TO a profile that leaves it unset, which must still
+		// clean up a previous profile's file rather than leave
+		// NetworkManager checking a network that is no longer active.
+		//
+		// The common case — no profile involved has ever configured this —
+		// stays a true no-op: Status is a plain, unprivileged file check
+		// (see nmConnectivityTarget.Status), so asking first costs nothing
+		// and keeps TargetsUntouched honest for every profile that never
+		// touches this feature, matching what it promises callers.
+		targets, err := d.ResolveTargets([]string{"nm-connectivity"})
+		if err != nil {
+			return EnableResult{}, err
+		}
+		staleFile := false
+		for _, t := range targets {
+			if st, statusErr := t.Status(ex, false); statusErr == nil && st.Enabled {
+				staleFile = true
+			}
+		}
+		if cfg.ConnectivityCheckURL == "" && !staleFile {
+			return EnableResult{TargetsUntouched: true}, nil
+		}
+		rep := &Report{}
+		setEach(d, rep, ex, targets, func(proxy.Target) proxy.Config { return cfg })
+		return EnableResult{Report: rep}, nil
 	}
 
 	// Route 3.

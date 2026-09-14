@@ -1,11 +1,15 @@
 package serve
 
 import (
+	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"proxy-helper/internal/proxy"
 )
 
 // withConfigDir points os.UserConfigDir at a temp dir so tests never touch
@@ -41,6 +45,68 @@ func stateFrom(r Router) *State {
 	s := &State{logger: NewLogger(io.Discard, false)}
 	s.current.Store(&snapshot{router: r, summary: "test"})
 	return s
+}
+
+// autoState builds a State in mode auto with the given verdict and a live
+// kick channel, for exercising NoteUpstreamFailure without a real prober.
+func autoState(t *testing.T, reachable bool) *State {
+	t.Helper()
+	s := &State{logger: NewLogger(io.Discard, false), kick: make(chan struct{}, 1)}
+	s.current.Store(&snapshot{router: directRouter{}, summary: "test", mode: proxy.ModeAuto})
+	s.reachable.Store(reachable)
+	return s
+}
+
+func TestNoteUpstreamFailureWakesOnDialErrorInAuto(t *testing.T) {
+	s := autoState(t, true)
+	dialErr := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+
+	s.NoteUpstreamFailure(Upstream{Kind: KindHTTP, Addr: "proxy.example:8080"}, dialErr)
+
+	select {
+	case <-s.kick:
+	default:
+		t.Fatal("expected NoteUpstreamFailure to wake the prober on a dial error")
+	}
+}
+
+func TestNoteUpstreamFailureIgnoresDirectRequests(t *testing.T) {
+	s := autoState(t, true)
+	dialErr := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+
+	s.NoteUpstreamFailure(Upstream{Kind: KindDirect}, dialErr)
+
+	select {
+	case <-s.kick:
+		t.Fatal("a direct-request failure says nothing about the upstream and must not wake the prober")
+	default:
+	}
+}
+
+func TestNoteUpstreamFailureIgnoresNonDialErrors(t *testing.T) {
+	s := autoState(t, true)
+	timeoutErr := &net.OpError{Op: "read", Err: errors.New("i/o timeout")}
+
+	s.NoteUpstreamFailure(Upstream{Kind: KindHTTP, Addr: "proxy.example:8080"}, timeoutErr)
+
+	select {
+	case <-s.kick:
+		t.Fatal("a post-dial error (e.g. a slow origin) must not wake the prober")
+	default:
+	}
+}
+
+func TestNoteUpstreamFailureIgnoresAlreadyDownVerdict(t *testing.T) {
+	s := autoState(t, false)
+	dialErr := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+
+	s.NoteUpstreamFailure(Upstream{Kind: KindHTTP, Addr: "proxy.example:8080"}, dialErr)
+
+	select {
+	case <-s.kick:
+		t.Fatal("the prober is already probing at the fast interval once the verdict is down; no need to wake it")
+	default:
+	}
 }
 
 func TestStateReloadPicksUpNewProfile(t *testing.T) {

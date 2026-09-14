@@ -1,8 +1,10 @@
 package serve
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync/atomic"
 
 	"proxy-helper/internal/proxy"
@@ -25,10 +27,27 @@ type State struct {
 	// than degrading. Never fail closed on missing information.
 	reachable atomic.Bool
 
-	// kick wakes the prober when Reload changed the upstream. Capacity 1
-	// and a non-blocking send: a pending wake-up is as good as two, and
-	// Reload must never block on a prober that is mid-dial.
+	// kick wakes the prober early, from NoteUpstreamFailure, without
+	// touching its fail/ok streak: a live request failing is reason to
+	// retry sooner than the current wait, but not reason to reset progress
+	// toward the fail threshold. Capacity 1 and a non-blocking send: a
+	// pending wake-up is as good as two, and the caller may never block on
+	// a prober that is mid-dial.
+	//
+	// This is deliberately a different channel from reloadKick below: a
+	// live outage produces a steady stream of failing requests for as long
+	// as the verdict stays wrong, and every one of them wakes the prober.
+	// If that also reset the streak (as a single shared channel used to),
+	// the reset would keep racing the count back to zero before it ever
+	// reached the threshold — the verdict would never flip, no matter how
+	// long the outage lasted.
 	kick chan struct{}
+
+	// reloadKick wakes the prober AND resets its tracker to agree with the
+	// optimistic verdict Reload just set: the upstream address itself
+	// changed, so the tracker's accumulated streak is about a target that
+	// no longer applies.
+	reloadKick chan struct{}
 
 	// port is only carried so the published runtime state can name it; the
 	// daemon, not State, decides where to listen.
@@ -57,7 +76,7 @@ func (directRouter) Route(string) Upstream { return Upstream{} }
 // NewState loads the current configuration. It fails only if the config is
 // unreadable at startup; a broken config during Reload is non-fatal.
 func NewState(logger *slog.Logger) (*State, error) {
-	s := &State{logger: logger, kick: make(chan struct{}, 1)}
+	s := &State{logger: logger, kick: make(chan struct{}, 1), reloadKick: make(chan struct{}, 1)}
 	snap, err := loadSnapshot(logger)
 	if err != nil {
 		return nil, err
@@ -132,7 +151,7 @@ func (s *State) Reload() error {
 	// interval elapsed.
 	if snap.upstreamAddr != old.upstreamAddr {
 		s.reachable.Store(true)
-		s.wake()
+		s.wakeForReload()
 	}
 	s.logger.Info("reload",
 		slog.String("from", old.profile),
@@ -143,13 +162,46 @@ func (s *State) Reload() error {
 	return nil
 }
 
-// wake nudges the prober without ever blocking the caller.
+// NoteUpstreamFailure lets a live request nudge the prober instead of
+// leaving auto's verdict to catch up on its next scheduled probe, which at
+// the slow (healthy-verdict) pace can lag a real outage by tens of seconds.
+//
+// It only fires when the failure actually says something about the
+// upstream: a dial error while in auto mode with the verdict still "up".
+// Anything else — direct requests, a strict-pinned mode, an origin that
+// timed out past a perfectly reachable upstream, or a verdict that already
+// says "down" — has nothing new to teach the prober, so it is left alone.
+func (s *State) NoteUpstreamFailure(up Upstream, err error) {
+	if up.Kind == KindDirect || s.Mode() != proxy.ModeAuto || !s.reachable.Load() {
+		return
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) || opErr.Op != "dial" {
+		return
+	}
+	s.wake()
+}
+
+// wake nudges the prober to retry sooner, without ever blocking the caller
+// and without resetting its fail/ok streak — see the kick field doc.
 func (s *State) wake() {
 	if s.kick == nil {
 		return
 	}
 	select {
 	case s.kick <- struct{}{}:
+	default:
+	}
+}
+
+// wakeForReload nudges the prober and tells it to resync its tracker to the
+// verdict Reload just set, because the upstream address changed.
+func (s *State) wakeForReload() {
+	if s.reloadKick == nil {
+		return
+	}
+	select {
+	case s.reloadKick <- struct{}{}:
 	default:
 	}
 }

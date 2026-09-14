@@ -318,11 +318,23 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 		if dp.repopulating {
 			return false
 		}
-		if state && !dp.confirmBridgeOn() {
+		if state {
+			// confirmBridgeOn used to run right here, synchronously inside
+			// this handler. A GtkSwitch fires "state-set" while its own
+			// pointer/touch grab for the drag gesture can still be active,
+			// and nesting gtk_dialog_run's own main loop inside that grab
+			// froze the whole window on some desktops (observed the hard
+			// way: GTK stuck spinning inside cgo, confirmed via a SIGQUIT
+			// goroutine dump). r.post runs it from a plain idle callback
+			// instead, after this handler and the switch's own drag
+			// handling have both fully returned — same timing revert
+			// already needed below, for the same "not during" reason.
 			dp.runner.post(func() {
-				dp.repopulating = true
-				dp.bridgeSwitch.SetActive(false)
-				dp.repopulating = false
+				if !dp.confirmBridgeOn() {
+					dp.repopulating = true
+					dp.bridgeSwitch.SetActive(false)
+					dp.repopulating = false
+				}
 				dp.refreshActionState()
 			})
 			return false
@@ -544,8 +556,13 @@ func (dp *daemonPage) refreshActionState() {
 
 // confirmBridgeOn asks before turning the bridge switch ON — never before
 // turning it off, per the task brief. Purely a dialog, no I/O, so (like
-// page_profiles.go's confirmDiscardChanges/confirmRemove) it runs
-// synchronously on the UI thread rather than through the runner.
+// page_profiles.go's confirmDiscardChanges/confirmRemove) it runs on the UI
+// thread rather than through the runner — but always from a runner.post
+// callback (see the "state-set" handler above), never called directly
+// inside a GTK signal handler: a GtkSwitch can still hold its own
+// pointer/touch grab for the drag gesture while "state-set" fires, and
+// nesting gtk_dialog_run's own main loop inside that grab froze the window
+// solid on at least one desktop.
 func (dp *daemonPage) confirmBridgeOn() bool {
 	dlg := gtk.MessageDialogNew(dp.topWindow, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", daemonBridgeConfirm)
 	dlg.SetModal(true)

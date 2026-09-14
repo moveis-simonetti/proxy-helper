@@ -801,8 +801,12 @@ func applyPrivileged(profile string, targets []string) (summary, cliOutput strin
 // calls elevateViaLocalCmds — one pkexec call, or two when dockerd needs
 // the bridge and other privileged targets still need loopback (see that
 // function's doc comment). Called off the UI thread, from inside a runner
-// job; the caller (apply()) is responsible for warning about a second
-// polkit dialog *before* this runs, via needsTwoElevatedCalls.
+// job. A free function, not a *statusPage method, because it never touches
+// page state — the Daemon page's reapplyAllTargets (page_daemon.go) calls
+// it too, for the same privileged targets, after a port/bridge change. A
+// caller that needs the two-pkexec-calls courtesy warned before this runs
+// is responsible for that itself, via needsTwoElevatedCalls — see apply()'s
+// doc comment for the pattern.
 //
 // noProxy must already be the merged (global + profile) list app.Apply
 // would have produced for the user-level targets — see MergeNoProxy. The
@@ -815,7 +819,7 @@ func applyPrivileged(profile string, targets []string) (summary, cliOutput strin
 // from their own global list (localhost, 127.0.0.1, host.docker.internal)
 // could come back, but only for the privileged targets. There is no CLI flag
 // to suppress that fallback merge; do not add one to work around it.
-func (sp *statusPage) applyPrivilegedViaLocal(port int, noProxy, targets []string, dockerBridge bool) (summary, cliOutput string) {
+func applyPrivilegedViaLocal(port int, noProxy, targets []string, dockerBridge bool) (summary, cliOutput string) {
 	binary, err := findCLIBinary()
 	if err != nil {
 		return fmt.Sprintf("privilegiados não aplicados: %s", err), ""
@@ -939,7 +943,7 @@ func (sp *statusPage) runApply(user, privileged []string) {
 		if len(privileged) > 0 {
 			port := pf.EffectiveLocalPort()
 			mergedNoProxy := proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
-			privMsg, privOut = sp.applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
+			privMsg, privOut = applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
 		}
 
 		return func() {

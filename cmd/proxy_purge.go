@@ -62,7 +62,7 @@ var proxyPurgeCmd = &cobra.Command{
 }
 
 func init() {
-	proxyPurgeCmd.Flags().StringSliceVar(&purgeTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyPurgeCmd.Flags().StringSliceVar(&purgeTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxyPurgeCmd.Flags().BoolVar(&purgeDryRun, "dry-run", false, "print what would change without applying it")
 	proxyCmd.AddCommand(proxyPurgeCmd)
 }

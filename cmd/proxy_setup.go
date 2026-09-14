@@ -103,7 +103,7 @@ func init() {
 	proxySetupCmd.Flags().StringVar(&setupUser, "user", "", "upstream proxy username")
 	proxySetupCmd.Flags().StringVar(&setupPass, "pass", "", "upstream proxy password")
 	proxySetupCmd.Flags().StringSliceVar(&setupNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy")
-	proxySetupCmd.Flags().StringSliceVar(&setupTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxySetupCmd.Flags().StringSliceVar(&setupTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxySetupCmd.Flags().StringVar(&setupMode, "mode", "", "routing mode to leave behind: auto (default), upstream or direct")
 	proxySetupCmd.Flags().IntVar(&setupLocalPort, "local-port", 0, "port for the local daemon (default: the configured one, or 8888)")
 	proxySetupCmd.Flags().BoolVar(&setupDockerBridge, "docker-bridge", false, "also listen on the Docker bridge so build containers can reach the proxy")

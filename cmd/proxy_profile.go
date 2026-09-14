@@ -46,12 +46,14 @@ func visibleProfileNames(pf *proxy.ProfileFile) []string {
 // --- add ---
 
 var (
-	profileAddScheme  string
-	profileAddHost    string
-	profileAddPort    string
-	profileAddUser    string
-	profileAddPass    string
-	profileAddNoProxy []string
+	profileAddScheme            string
+	profileAddHost              string
+	profileAddPort              string
+	profileAddUser              string
+	profileAddPass              string
+	profileAddNoProxy           []string
+	profileAddConnCheckURL      string
+	profileAddConnCheckResponse string
 )
 
 var proxyProfileAddCmd = &cobra.Command{
@@ -72,12 +74,14 @@ var proxyProfileAddCmd = &cobra.Command{
 				return fmt.Errorf("profile %q already exists (use \"proxy profile edit\" to change it)", name)
 			}
 			pf.Profiles[name] = proxy.Config{
-				Scheme:   profileAddScheme,
-				Host:     profileAddHost,
-				Port:     profileAddPort,
-				Username: profileAddUser,
-				Password: profileAddPass,
-				NoProxy:  profileAddNoProxy,
+				Scheme:                    profileAddScheme,
+				Host:                      profileAddHost,
+				Port:                      profileAddPort,
+				Username:                  profileAddUser,
+				Password:                  profileAddPass,
+				NoProxy:                   profileAddNoProxy,
+				ConnectivityCheckURL:      profileAddConnCheckURL,
+				ConnectivityCheckResponse: profileAddConnCheckResponse,
 			}
 			return nil
 		})
@@ -92,12 +96,14 @@ var proxyProfileAddCmd = &cobra.Command{
 // --- edit ---
 
 var (
-	profileEditScheme  string
-	profileEditHost    string
-	profileEditPort    string
-	profileEditUser    string
-	profileEditPass    string
-	profileEditNoProxy []string
+	profileEditScheme            string
+	profileEditHost              string
+	profileEditPort              string
+	profileEditUser              string
+	profileEditPass              string
+	profileEditNoProxy           []string
+	profileEditConnCheckURL      string
+	profileEditConnCheckResponse string
 )
 
 var proxyProfileEditCmd = &cobra.Command{
@@ -136,6 +142,12 @@ var proxyProfileEditCmd = &cobra.Command{
 			}
 			if cmd.Flags().Changed("no-proxy") {
 				cfg.NoProxy = profileEditNoProxy
+			}
+			if cmd.Flags().Changed("connectivity-check-url") {
+				cfg.ConnectivityCheckURL = profileEditConnCheckURL
+			}
+			if cmd.Flags().Changed("connectivity-check-response") {
+				cfg.ConnectivityCheckResponse = profileEditConnCheckResponse
 			}
 
 			return name, cfg, nil
@@ -314,6 +326,8 @@ func init() {
 	proxyProfileAddCmd.Flags().StringVar(&profileAddUser, "user", "", "proxy username")
 	proxyProfileAddCmd.Flags().StringVar(&profileAddPass, "pass", "", "proxy password")
 	proxyProfileAddCmd.Flags().StringSliceVar(&profileAddNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
+	proxyProfileAddCmd.Flags().StringVar(&profileAddConnCheckURL, "connectivity-check-url", "", "point NetworkManager's own connectivity check at a URL this network answers without a proxy (see \"nm-connectivity\" target); leave unset to not touch it")
+	proxyProfileAddCmd.Flags().StringVar(&profileAddConnCheckResponse, "connectivity-check-response", "", "text the connectivity check URL's response body must start with (required for --connectivity-check-url to actually detect success)")
 
 	proxyProfileEditCmd.Flags().StringVar(&profileEditScheme, "scheme", "", "proxy scheme: http, https, socks5")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditHost, "host", "", "proxy host")
@@ -321,12 +335,14 @@ func init() {
 	proxyProfileEditCmd.Flags().StringVar(&profileEditUser, "user", "", "proxy username")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditPass, "pass", "", "proxy password")
 	proxyProfileEditCmd.Flags().StringSliceVar(&profileEditNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
+	proxyProfileEditCmd.Flags().StringVar(&profileEditConnCheckURL, "connectivity-check-url", "", "point NetworkManager's own connectivity check at a URL this network answers without a proxy; empty clears it")
+	proxyProfileEditCmd.Flags().StringVar(&profileEditConnCheckResponse, "connectivity-check-response", "", "text the connectivity check URL's response body must start with")
 
-	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableDryRun, "dry-run", false, "print what would change without applying it")
 	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableNoViaLocal, "no-via-local", false, "write the upstream and its credentials straight into every tool's config, instead of pointing them at the local proxy (see \"proxy serve\")")
 
-	proxyProfileDisableCmd.Flags().StringSliceVar(&profileDisableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyProfileDisableCmd.Flags().StringSliceVar(&profileDisableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxyProfileDisableCmd.Flags().BoolVar(&profileDisableDryRun, "dry-run", false, "print what would change without applying it")
 
 	proxyProfileCmd.AddCommand(proxyProfileAddCmd, proxyProfileEditCmd, proxyProfileRemoveCmd, proxyProfileListCmd, proxyProfileEnableCmd, proxyProfileDisableCmd)

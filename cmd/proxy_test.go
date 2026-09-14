@@ -147,7 +147,7 @@ func TestProfileEnableViaLocalKeepsCredentialOutOfTargets(t *testing.T) {
 	resetProfileFlags(t)
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	got := h.sets()
@@ -180,7 +180,7 @@ func TestProfileEnableViaLocalActivatesTheNamedProfile(t *testing.T) {
 	resetProfileFlags(t)
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	pf := h.profiles(t)
@@ -199,21 +199,19 @@ func TestProfileEnableViaLocalActivatesTheNamedProfile(t *testing.T) {
 // axis: once the targets point at the daemon, switching profiles is pure
 // state. No target may be written, with or without sudo.
 //
-// --no-via-local is passed explicitly: via-local is the CLI default now, so
-// a bare "profile enable" always takes app.Enable's route 1 (re-apply the
-// plumbing) regardless of pf.ViaLocal. Route 2, the pure-state switch this
-// test guards, is app.Enable's behaviour for viaLocal=false while the
-// plumbing is already up — reached here the same way a caller who wants that
-// no-op today would reach it.
+// No flag is passed: via-local is the CLI default now, but a bare "profile
+// enable" only forces app.Enable's route 1 (re-apply the plumbing) when the
+// plumbing is not already up (see the RunE in cmd/proxy_profile.go). Here
+// pf.ViaLocal is already true, so the default run takes route 2, the
+// pure-state switch this test guards.
 func TestProfileEnableWithPlumbingTouchesNoTarget(t *testing.T) {
 	h := newHarness(t, `{"active_profile":"work","via_local":true,"profiles":{
 		"work":{"scheme":"http","host":"proxy.corp","port":"8080","user":"alice","pass":"s3cr3t"},
 		"home":{"scheme":"http","host":"home.proxy","port":"3128"}}}`)
 	resetProfileFlags(t)
-	profileEnableNoViaLocal = true
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"home"}); err != nil {
-		t.Fatalf("profile enable --no-via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	if got := h.sets(); len(got) != 0 {
@@ -263,7 +261,7 @@ func TestViaLocalHonoursTheConfiguredPort(t *testing.T) {
 	resetProfileFlags(t)
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	for _, cfg := range h.sets() {
@@ -512,7 +510,7 @@ func TestDockerTargetsGetABridgeAddress(t *testing.T) {
 	t.Cleanup(func() { bridgeAddr = origBridgeAddr })
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	for _, ft := range h.targets {

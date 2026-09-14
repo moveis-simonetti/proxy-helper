@@ -172,23 +172,37 @@ func sameRows(a, b []logRow) bool {
 // portChangeStrandsTargets reports whether changing the daemon's port left
 // the targets behind.
 //
-// applyPrimary persists the new port and reinstalls the unit, but it does
-// not re-apply the targets — that is the Status page's job, over the user's
-// own selection. So every target keeps the old port until the user applies
-// again, and the failure shows up later, detached from the change that
-// caused it. This is what the warning is for.
+// applyPrimary tries to re-apply every target itself (reapplyAllTargets)
+// whenever the port changes, and portChangeStrandsTargets is what decides
+// whether that is even necessary. It still names the gap this warning
+// exists for: reapplyAllTargets only runs when the targets are already
+// plumbed to the daemon and a profile is active — outside that, every
+// target keeps the old port until the user applies by hand on the Status
+// page, and the failure shows up later, detached from the change that
+// caused it. staleTargetsWarning is what applyPrimary falls back to then.
 func portChangeStrandsTargets(oldPort, newPort int) bool {
 	return oldPort != newPort
 }
 
 // staleTargetsWarning explains the situation portChangeStrandsTargets
-// detects. It names both ports: what the targets still say, and what they
+// detects, for applyPrimary's fallback path (reapplyAllTargets could not
+// run). It names both ports: what the targets still say, and what they
 // should say — without which the user cannot tell whether a later failure
 // is this or something else.
 func staleTargetsWarning(oldPort, newPort int) string {
 	return fmt.Sprintf(
 		"os alvos ainda apontam para a porta %d, não para %d — reaplique na aba Status",
 		oldPort, newPort)
+}
+
+// staleBridgeWarning is staleTargetsWarning's counterpart for a
+// docker_bridge change applyPrimary could not reapply automatically
+// (reapplyAllTargets came back not-ok): dockerd/docker-config keep
+// pointing at whichever address they had before, until reapplied by hand.
+// No port numbers to name here — docker_bridge is a bool, not a moving
+// target — so the message stays generic on purpose.
+func staleBridgeWarning() string {
+	return "a bridge do Docker mudou, mas dockerd/docker-config ainda apontam para o endereço antigo — reaplique na aba Status"
 }
 
 // daemonApplyMessage builds the line applyPrimary shows after saving. The

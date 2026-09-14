@@ -268,6 +268,15 @@ func TestStaleTargetsWarningNamesBothPorts(t *testing.T) {
 	}
 }
 
+// TestStaleBridgeWarningNamesTheTargets keeps the fallback message
+// actionable even without port numbers to point at.
+func TestStaleBridgeWarningNamesTheTargets(t *testing.T) {
+	got := staleBridgeWarning()
+	if !strings.Contains(got, "dockerd") || !strings.Contains(got, "docker-config") {
+		t.Errorf("the warning must name the two docker targets, got: %q", got)
+	}
+}
+
 // TestDaemonApplyMessageCarriesTheWarning keeps the warning attached to the
 // result the user is already reading. Shown anywhere else it would compete
 // with the "alterações aplicadas" line and be missed.

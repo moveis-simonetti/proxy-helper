@@ -18,6 +18,16 @@ import (
 	socks "golang.org/x/net/proxy"
 )
 
+// dialTimeout bounds every outbound dial this daemon makes — to the
+// upstream proxy, to a SOCKS5 upstream, or straight to the target in direct
+// mode. A real TCP handshake settles in well under a second even on a poor
+// network; this only exists to fail fast when the other end is not
+// answering at all. It matters most for requests that started dialing a
+// target in the brief window before mode auto's reachability verdict
+// catches up with a network change — a shorter timeout here is a shorter
+// tail of stuck 502s during that window, not just a generic knob.
+const dialTimeout = 5 * time.Second
+
 // hopByHopHeaders must not be forwarded to the next hop. The client's own
 // Proxy-Authorization is included on purpose: credentials on the outgoing
 // hop are the daemon's business, never the client's.
@@ -124,7 +134,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, req *http.Request) {
 
 // dialUpstream opens the outbound leg of a CONNECT tunnel.
 func (s *Server) dialUpstream(ctx context.Context, up Upstream, target string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	dialer := &net.Dialer{Timeout: dialTimeout}
 
 	switch up.Kind {
 	case KindDirect:
@@ -211,6 +221,7 @@ func (s *Server) handleForward(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *Server) fail(w http.ResponseWriter, up Upstream, host, method string, start time.Time, err error) {
+	s.state.NoteUpstreamFailure(up, err)
 	target := up.Addr
 	if up.Kind == KindDirect {
 		target = host
@@ -264,9 +275,9 @@ func (s *Server) transportFor(up Upstream) *http.Transport {
 	// limit) but died here at the old 60s — same page, different scheme.
 	// The hung-upstream case stays covered by the client, whose own timeout
 	// or disconnect cancels req.Context() and with it the upstream request,
-	// and by the 15s dial timeout for an upstream that is actually down.
+	// and by dialTimeout for an upstream that is actually down.
 	t := &http.Transport{
-		DialContext:     (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+		DialContext:     (&net.Dialer{Timeout: dialTimeout}).DialContext,
 		IdleConnTimeout: 90 * time.Second,
 	}
 	switch up.Kind {
@@ -326,7 +337,7 @@ func socksDialContext(up Upstream) func(ctx context.Context, network, addr strin
 		auth = &socks.Auth{User: up.User, Password: up.Pass}
 	}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		d, err := socks.SOCKS5("tcp", up.Addr, auth, &net.Dialer{Timeout: 15 * time.Second})
+		d, err := socks.SOCKS5("tcp", up.Addr, auth, &net.Dialer{Timeout: dialTimeout})
 		if err != nil {
 			return nil, err
 		}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"proxy-helper/internal/app"
@@ -721,15 +722,15 @@ func (dp *daemonPage) applyPrimary() {
 		// mirrors cmd/proxy_serve.go's "install" command: --via-local and
 		// "proxy status" read LocalPort from disk, so a unit installed
 		// before the new port is saved would briefly disagree with them.
-		// Captured inside the lock, before the overwrite: the old port is
-		// what every target still points at, and it is gone the moment the
-		// new one is saved. Reading it afterwards would always report "no
-		// change".
-		var warning string
+		// Captured inside the lock, before the overwrite: the old port and
+		// bridge are what every target still points at, and they are gone
+		// the moment the new values are saved. Reading them afterwards
+		// would always report "no change".
+		var oldPort int
+		var oldBridge bool
 		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
-			if portChangeStrandsTargets(lpf.EffectiveLocalPort(), form.Port) {
-				warning = staleTargetsWarning(lpf.EffectiveLocalPort(), form.Port)
-			}
+			oldPort = lpf.EffectiveLocalPort()
+			oldBridge = lpf.DockerBridge
 			lpf.LocalPort = form.Port
 			lpf.DockerBridge = form.DockerBridge
 			return nil
@@ -738,6 +739,8 @@ func (dp *daemonPage) applyPrimary() {
 				dp.resultLbl.SetText(fmt.Sprintf("erro ao salvar configuração: %s", err))
 			}
 		}
+		portChanged := portChangeStrandsTargets(oldPort, form.Port)
+		bridgeChanged := oldBridge != form.DockerBridge
 
 		// EscalateNone: InstallUnit only ever runs "systemctl --user ...",
 		// which never needs root. A blocking password prompt here would
@@ -750,14 +753,103 @@ func (dp *daemonPage) applyPrimary() {
 			}
 		}
 
+		// A port or bridge change leaves every target pointing at the old
+		// value — reapplyAllTargets (outside proxy.WithProfileLock, which
+		// does not nest, and after InstallUnit, which is what "the daemon
+		// is there to receive the new plumbing" means) tries to fix that on
+		// the spot instead of making the user go do it by hand on the
+		// Status page. It only runs when there is something sensible to
+		// reapply to — targets already plumbed to the daemon, and a
+		// profile active; see its own doc comment for why.
+		var warning string
+		if portChanged || bridgeChanged {
+			if reapplyMsg, ok := reapplyAllTargets(); ok {
+				warning = reapplyMsg
+			} else {
+				switch {
+				case portChanged && bridgeChanged:
+					warning = staleTargetsWarning(oldPort, form.Port) + "; " + staleBridgeWarning()
+				case portChanged:
+					warning = staleTargetsWarning(oldPort, form.Port)
+				default:
+					warning = staleBridgeWarning()
+				}
+			}
+		}
+
 		return func() {
 			// Through pendingResult, not SetText: dp.load() below would
 			// clear the label before the user could read it.
 			dp.pendingResult = daemonApplyMessage(wasInstalled, warning)
-			dp.setStaleTargetsBtnVisible(warning != "")
+			// The fallback button only makes sense when nothing was
+			// reapplied automatically — reapplyAllTargets succeeding (even
+			// with a warning riding along, e.g. a partial failure it
+			// already reported) means there is nothing left for a trip to
+			// the Status page to fix that this run did not already try.
+			dp.setStaleTargetsBtnVisible(warning != "" && !strings.HasPrefix(warning, "alvos reaplicados"))
 			dp.load()
 		}
 	})
+}
+
+// reapplyAllTargets re-plumbs every target at the (possibly new) port and
+// bridge address right after applyPrimary saves a port or docker_bridge
+// change — the same in-process/pkexec split the Status page's apply() uses
+// for the user's own selection, reused here over every target instead
+// (splitSessionAware and applyPrivilegedViaLocal, both in elevate.go/
+// page_status.go, take no page-specific state). Runs off the UI thread,
+// called only from inside applyPrimary's runner job.
+//
+// Returns ok=false when there is nothing sensible to reapply yet — no
+// active profile to read a config from, or the targets were never plumbed
+// to the daemon in the first place (pf.ViaLocal false, e.g. before the
+// daemon's own first-boot self-apply has run). The caller falls back to
+// the old "go apply it yourself" notice in that case.
+//
+// Unlike the Status page's apply(), this never pre-warns about a
+// dockerd-plus-bridge combination needing two separate pkexec calls — Salvar
+// is one action already in flight when this runs, not a second stage a user
+// could still back out of, so the two prompts simply appear one after the
+// other instead of being announced first.
+func reapplyAllTargets() (msg string, ok bool) {
+	profile, cfg, pf, err := activeProfile()
+	if err != nil || !pf.ViaLocal {
+		return "", false
+	}
+
+	var infos []selectedTargetInfo
+	for _, t := range proxy.AllTargets() {
+		infos = append(infos, selectedTargetInfo{
+			Name:          t.Name(),
+			Root:          t.RequiresRoot(),
+			SessionScoped: t.SessionScoped(),
+		})
+	}
+	user, privileged := splitSessionAware(infos)
+
+	var userErr error
+	if len(user) > 0 {
+		ex := &proxy.Executor{Escalation: proxy.EscalateNone, Out: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+		_, userErr = app.Apply(statusDeps(), ex, profile, cfg, user, true)
+	}
+
+	var privMsg string
+	if len(privileged) > 0 {
+		port := pf.EffectiveLocalPort()
+		mergedNoProxy := proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
+		privMsg, _ = applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
+	}
+
+	switch {
+	case userErr != nil && privMsg != "":
+		return fmt.Sprintf("alvos reaplicados com ressalvas: %s; %s", userErr, privMsg), true
+	case userErr != nil:
+		return fmt.Sprintf("alvos reaplicados com ressalvas: %s", userErr), true
+	case privMsg != "":
+		return "alvos reaplicados — " + privMsg, true
+	default:
+		return "alvos reaplicados", true
+	}
 }
 
 // confirmAndRemove asks for confirmation, modal and transient for the main

@@ -957,7 +957,7 @@ func (sp *statusPage) runApply(user, privileged []string) {
 // targets — dockerd needs the bridge address, the rest need loopback, and a
 // single --host cannot serve both (see elevateViaLocalCmds's doc comment).
 // Replaced by the real result once both calls finish.
-const twoDialogsWarning = "\"Via daemon local\": bridge do Docker habilitada e dockerd selecionado vão pedir a senha " +
+const twoDialogsWarning = "Aplicar: bridge do Docker habilitada e dockerd selecionado vão pedir a senha " +
 	"duas vezes — uma para o dockerd (endereço da bridge) e outra para os demais alvos privilegiados (loopback)."
 
 // clear removes the current selection: same in-process/pkexec split as

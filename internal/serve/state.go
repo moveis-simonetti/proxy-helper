@@ -229,6 +229,21 @@ func loadSnapshot(logger *slog.Logger) (*snapshot, error) {
 	}
 	cfg.NoProxy = proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
 
+	// With the Docker bridge listener on, every container on the machine can
+	// reach this daemon — so a container's own HTTP_PROXY pointed here,
+	// without its NO_PROXY excluding its own network, would otherwise send
+	// its calls to sibling containers out to whatever upstream is
+	// configured instead of keeping them on the host. Detection failing is
+	// non-fatal: it only means this pass skips the extra exclusions, not
+	// that the daemon fails to start.
+	if pf.DockerBridge {
+		if subnets, err := lookupDockerNetworkSubnets(); err != nil {
+			logger.Warn("docker_subnet_detection_failed", slog.String("error", err.Error()))
+		} else if len(subnets) > 0 {
+			cfg.NoProxy = proxy.MergeNoProxy(cfg.NoProxy, subnets)
+		}
+	}
+
 	user, pass, deprecated, err := Resolve(cfg)
 	if err != nil {
 		return nil, err

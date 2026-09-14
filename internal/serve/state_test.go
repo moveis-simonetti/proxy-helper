@@ -183,6 +183,72 @@ func TestStateMergesGlobalNoProxy(t *testing.T) {
 	}
 }
 
+// swapDockerNetworkSubnets replaces the package-level Docker subnet lookup
+// for the duration of the test, so loadSnapshot's docker_bridge branch can
+// be exercised without depending on this host's real network interfaces.
+func swapDockerNetworkSubnets(t *testing.T, fn func() ([]string, error)) {
+	t.Helper()
+	orig := lookupDockerNetworkSubnets
+	lookupDockerNetworkSubnets = fn
+	t.Cleanup(func() { lookupDockerNetworkSubnets = orig })
+}
+
+func TestDockerBridgeAddsDetectedSubnetsToNoProxy(t *testing.T) {
+	path := withConfigDir(t)
+	writeConfig(t, path, `{"active_profile":"a","docker_bridge":true,
+		"profiles":{"a":{"scheme":"http","host":"a.corp","port":"8080"}}}`)
+	swapDockerNetworkSubnets(t, func() ([]string, error) { return []string{"172.19.0.0/16"}, nil })
+
+	st, err := NewState(NewLogger(io.Discard, false))
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	if got := st.Router().Route("172.19.0.5").Kind; got != KindDirect {
+		t.Errorf("Route(172.19.0.5) = %v, want DIRECT once its network is detected as a Docker bridge", got)
+	}
+	// Unrelated traffic must still go through the proxy — this is an
+	// addition to the no-proxy list, not a switch to direct-everything.
+	if got := st.Router().Route("example.com").Kind; got != KindHTTP {
+		t.Errorf("Route(example.com) = %v, want the profile's upstream, untouched by the docker exclusion", got)
+	}
+}
+
+func TestNoDockerBridgeSkipsSubnetDetection(t *testing.T) {
+	path := withConfigDir(t)
+	writeConfig(t, path, `{"active_profile":"a",
+		"profiles":{"a":{"scheme":"http","host":"a.corp","port":"8080"}}}`)
+	called := false
+	swapDockerNetworkSubnets(t, func() ([]string, error) {
+		called = true
+		return []string{"172.19.0.0/16"}, nil
+	})
+
+	st, err := NewState(NewLogger(io.Discard, false))
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	if called {
+		t.Error("subnet detection must not run when docker_bridge is off")
+	}
+	if got := st.Router().Route("172.19.0.5").Kind; got != KindHTTP {
+		t.Errorf("Route(172.19.0.5) = %v, docker_bridge is off so nothing should have excluded it", got)
+	}
+}
+
+// A detection failure (e.g. a permissions error listing interfaces) must
+// not take the daemon down: it only means this pass has no extra
+// exclusions to add.
+func TestDockerSubnetDetectionFailureIsNonFatal(t *testing.T) {
+	path := withConfigDir(t)
+	writeConfig(t, path, `{"active_profile":"a","docker_bridge":true,
+		"profiles":{"a":{"scheme":"http","host":"a.corp","port":"8080"}}}`)
+	swapDockerNetworkSubnets(t, func() ([]string, error) { return nil, errors.New("boom") })
+
+	if _, err := NewState(NewLogger(io.Discard, false)); err != nil {
+		t.Fatalf("NewState must survive a subnet detection failure, got: %v", err)
+	}
+}
+
 // TestStateSummaryIgnoresNoProxyMatches guards the health line: it must be
 // derived from the configured upstream, not from probing a made-up host that
 // a no-proxy entry might happen to match.

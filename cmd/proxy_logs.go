@@ -34,7 +34,7 @@ var proxyLogsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		since := serve.EffectiveSince(logsSince, pf.LogsSince, logsAll)
+		since := serve.NormalizeSince(serve.EffectiveSince(logsSince, pf.LogsSince, logsAll))
 
 		journalArgs := []string{"--user", "-u", serve.UnitName, "-o", "json", "--no-pager"}
 		if logsFollow {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -367,4 +368,23 @@ func EffectiveSince(userSince, cutoff string, all bool) string {
 	default:
 		return cutoff
 	}
+}
+
+// relativeDurationRe matches a bare systemd.time span ("10m", "1h30m") with
+// nothing else around it: one or more <number><unit> tokens, optionally
+// separated by whitespace, and nothing before or after them.
+var relativeDurationRe = regexp.MustCompile(`(?i)^\s*(\d+(?:\.\d+)?\s*(?:y|years?|mon|months?|w|weeks?|d|days?|h|hours?|m|min|mins|minutes?|s|sec|secs|seconds?)\s*)+$`)
+
+// NormalizeSince rewrites a bare relative duration into the form journalctl
+// actually accepts. journalctl requires a leading "-" to mean "this long
+// ago" and errors out on a plain span ("Failed to parse timestamp: 10m") —
+// even though that is the natural way to type it, and the very help text on
+// "proxy logs --since" uses "10m" as its example. An absolute timestamp, a
+// journalctl keyword ("today", "yesterday", "now"), or a value already
+// prefixed with -/+/@ passes through untouched.
+func NormalizeSince(s string) string {
+	if relativeDurationRe.MatchString(s) {
+		return "-" + strings.TrimSpace(s)
+	}
+	return s
 }

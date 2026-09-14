@@ -21,6 +21,20 @@ type Config struct {
 	PasswordFile string   `json:"password_file,omitempty"`
 	PasswordEnv  string   `json:"password_env,omitempty"`
 	NoProxy      []string `json:"no_proxy,omitempty"`
+	// ConnectivityCheckURL and ConnectivityCheckResponse point
+	// NetworkManager's own connectivity checker at something this specific
+	// network answers directly, without a proxy. NetworkManager's checker
+	// has no proxy support of its own — neither its per-connection PAC
+	// settings nor NetworkManager.conf offer one — so on a network that
+	// requires a proxy for everything else, NM always reports "limited"
+	// connectivity even though this daemon is routing everything fine.
+	// There is no way to discover a URL like this automatically: it is
+	// necessarily specific to one network's own quirks (an internal page,
+	// the proxy host's own web server, ...), so it is opt-in per profile,
+	// left empty means "leave NetworkManager's connectivity check alone."
+	// See internal/proxy/nmconnectivity.go.
+	ConnectivityCheckURL      string `json:"connectivity_check_url,omitempty"`
+	ConnectivityCheckResponse string `json:"connectivity_check_response,omitempty"`
 }
 
 // URL renders the proxy as a scheme://[user[:pass]@]host[:port] string.
@@ -76,10 +90,12 @@ func TargetConfigAt(cfg Config, viaLocal bool, port int, host string) Config {
 		host = "127.0.0.1"
 	}
 	return Config{
-		Scheme:  "http",
-		Host:    host,
-		Port:    strconv.Itoa(port),
-		NoProxy: cfg.NoProxy,
+		Scheme:                    "http",
+		Host:                      host,
+		Port:                      strconv.Itoa(port),
+		NoProxy:                   cfg.NoProxy,
+		ConnectivityCheckURL:      cfg.ConnectivityCheckURL,
+		ConnectivityCheckResponse: cfg.ConnectivityCheckResponse,
 	}
 }
 

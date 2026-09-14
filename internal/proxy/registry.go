@@ -21,6 +21,7 @@ func AllTargets() []Target {
 		NewSnapTarget(),
 		NewAptTarget(),
 		NewSystemEnvTarget(),
+		NewNMConnectivityTarget(),
 	}
 }
 

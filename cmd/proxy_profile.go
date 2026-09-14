@@ -236,8 +236,24 @@ var proxyProfileEnableCmd = &cobra.Command{
 	Short: "Apply a saved profile's proxy settings and mark it active",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		viaLocal := !profileEnableNoViaLocal
+		if viaLocal {
+			// Only force Route 1 (rewrite every target, sudo included) when
+			// the plumbing is not already up. Once it is, forcing Route 1 on
+			// every plain "profile enable" would turn the daily, sudo-free
+			// profile switch into a full privileged rewrite — Route 2 exists
+			// precisely to avoid that. See app.Enable's doc comment: passing
+			// viaLocal=true always takes Route 1; viaLocal=false lets
+			// pf.ViaLocal itself pick between Route 2 (already plumbed) and
+			// Route 3 (the --no-via-local escape hatch, untouched here).
+			pf, err := proxy.LoadProfiles()
+			if err != nil {
+				return err
+			}
+			viaLocal = !pf.ViaLocal
+		}
 		ex := &proxy.Executor{DryRun: profileEnableDryRun}
-		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, !profileEnableNoViaLocal)
+		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, viaLocal)
 		if err != nil {
 			return err
 		}

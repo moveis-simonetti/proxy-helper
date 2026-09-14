@@ -764,7 +764,7 @@ func (dp *daemonPage) applyPrimary() {
 		// freeze the window with no way out; failing explicitly instead
 		// (per the task brief) surfaces the problem instead of hanging.
 		ex := &proxy.Executor{Escalation: proxy.EscalateNone}
-		if err := serve.InstallUnit(ex, execPath, form.Port, form.DockerBridge); err != nil {
+		if err := serve.InstallUnit(ex, execPath, form.Port, form.DockerBridge, false); err != nil {
 			return func() {
 				dp.resultLbl.SetText(fmt.Sprintf("erro ao instalar serviço: %s", err))
 			}

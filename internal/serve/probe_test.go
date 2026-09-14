@@ -2,7 +2,9 @@ package serve
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -142,6 +144,46 @@ func TestWatchDegradesAndRecovers(t *testing.T) {
 	if up := st.Router().Route("example.com"); up.Kind != KindHTTP {
 		t.Errorf("Route = %v, want the upstream once it answers again", up)
 	}
+}
+
+// Regression test for a livelock: NoteUpstreamFailure used to share its
+// wake-up channel with Reload, and that channel's handler unconditionally
+// reset the tracker's fail streak. During a real outage every live request
+// fails and calls NoteUpstreamFailure — so with a shared channel, each of
+// those wake-ups reset the streak back to zero before three consecutive
+// probe failures could ever accumulate, and the verdict stayed "up" no
+// matter how long the outage lasted. This drives exactly that flood
+// (concurrently with the probe loop, like real traffic would) and requires
+// the verdict to flip anyway.
+func TestWatchFlipsDownUnderAConstantStreamOfLiveFailures(t *testing.T) {
+	st := newAutoState(t, "proxy.corp")
+	p := &scriptedProber{answers: []bool{false}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go st.Watch(ctx, fastWatch(p))
+
+	dialErr := &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				st.NoteUpstreamFailure(Upstream{Kind: KindHTTP, Addr: "proxy.corp:8080"}, dialErr)
+			}
+		}
+	}()
+	defer wg.Wait()
+	defer close(stop)
+
+	waitFor(t, "the upstream to be marked down despite a constant stream of live failures", func() bool {
+		return !st.Reachable()
+	})
 }
 
 // It dials the upstream, not the request's host.

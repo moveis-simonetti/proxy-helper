@@ -26,10 +26,13 @@ func UnitPath() (string, error) {
 // RenderUnit builds the unit file. ExecReload is what makes "proxy off" and
 // profile switches instant: systemctl --user reload sends SIGHUP, and the
 // daemon swaps its routing state without dropping connections.
-func RenderUnit(execPath string, port int, dockerBridge bool) string {
-	bridgeFlag := ""
+func RenderUnit(execPath string, port int, dockerBridge, debug bool) string {
+	extraFlags := ""
 	if dockerBridge {
-		bridgeFlag = " --docker-bridge"
+		extraFlags += " --docker-bridge"
+	}
+	if debug {
+		extraFlags += " --debug"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=proxy-helper local forward proxy
@@ -48,17 +51,22 @@ PrivateTmp=true
 
 [Install]
 WantedBy=default.target
-`, execPath, port, bridgeFlag)
+`, execPath, port, extraFlags)
 }
 
 // InstallUnit writes the unit and enables it. Every side effect goes through
 // the Executor so --dry-run works.
-func InstallUnit(ex *proxy.Executor, execPath string, port int, dockerBridge bool) error {
+//
+// debug is deliberately not persisted anywhere the way dockerBridge is: it is
+// a diagnostic knob for capturing one incident, not a routing requirement, so
+// the next "proxy serve install" run (for an unrelated reason, e.g. a port
+// change) reverting it back off without the flag is the expected behavior.
+func InstallUnit(ex *proxy.Executor, execPath string, port int, dockerBridge, debug bool) error {
 	path, err := UnitPath()
 	if err != nil {
 		return err
 	}
-	if err := ex.WriteFile(path, []byte(RenderUnit(execPath, port, dockerBridge)), 0o644); err != nil {
+	if err := ex.WriteFile(path, []byte(RenderUnit(execPath, port, dockerBridge, debug)), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	if err := ex.Run("systemctl", "--user", "daemon-reload"); err != nil {

@@ -42,7 +42,7 @@ func installDaemon(ex *proxy.Executor) error {
 	if port == 0 {
 		port = pf.EffectiveLocalPort()
 	}
-	return serve.InstallUnit(ex, execPath, port, setupDockerBridge || pf.DockerBridge)
+	return serve.InstallUnit(ex, execPath, port, setupDockerBridge || pf.DockerBridge, false)
 }
 
 var proxySetupCmd = &cobra.Command{

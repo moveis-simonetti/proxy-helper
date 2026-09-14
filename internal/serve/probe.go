@@ -141,8 +141,8 @@ func (o WatchOptions) withDefaults() WatchOptions {
 //
 // Outside auto it probes nothing at all: upstream is a strict pin that
 // ignores the verdict, and direct has no upstream to ask about. The loop
-// still wakes on State.kick, so a reload into auto starts probing without
-// waiting out an interval.
+// still wakes on State.reloadKick, so a reload into auto starts probing
+// without waiting out an interval.
 //
 // The verdict lives in State.reachable rather than in the snapshot, so this
 // loop never builds a snapshot and never contends with Reload for the
@@ -159,7 +159,9 @@ func (s *State) Watch(ctx context.Context, o WatchOptions) {
 
 		wait := o.IntervalUp
 		if addr != "" {
+			attemptStart := time.Now()
 			ok := o.Prober.Reachable(ctx, addr)
+			s.logProbeAttempt(addr, ok, time.Since(attemptStart))
 			if tracker.observe(ok) {
 				s.setReachable(tracker.up)
 				s.logTransition(tracker.up, addr, o.FailThreshold)
@@ -173,12 +175,19 @@ func (s *State) Watch(ctx context.Context, o WatchOptions) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-s.kick:
-			// Reload changed the upstream: it reset the verdict to
-			// optimistic, so the tracker has to agree or the next failure
-			// would count against a streak that no longer applies.
+		case <-s.reloadKick:
+			// Reload changed the upstream and already reset the verdict to
+			// optimistic: the tracker has to agree, or the next failure
+			// would count against a streak that belonged to the old
+			// address. Loop immediately into a fresh probe below.
 			tracker.up = s.Reachable()
 			tracker.fails, tracker.oks = 0, 0
+		case <-s.kick:
+			// NoteUpstreamFailure: a live request just failed to dial the
+			// upstream. The verdict and the tracker's streak are left
+			// exactly as they are — only observe() (below, next loop) may
+			// touch them — this only skips the rest of the current wait so
+			// that observation happens now instead of later.
 		case <-time.After(wait):
 		}
 	}
@@ -197,6 +206,20 @@ func probeInterval(t *reachabilityTracker, o WatchOptions) time.Duration {
 		return o.IntervalDown
 	}
 	return o.IntervalUp
+}
+
+// logProbeAttempt records one raw probe result at Debug level. It is silent
+// under the daemon's default level (Info): logTransition already covers the
+// two moments that matter for normal operation. This is for diagnosing a
+// specific kind of report — "auto took a long time to notice the network
+// changed" — where the transition log alone cannot say whether the loop was
+// retrying and genuinely failing the whole time, or stalled somewhere.
+// Enable it with "proxy serve --debug".
+func (s *State) logProbeAttempt(addr string, ok bool, took time.Duration) {
+	s.logger.Debug("probe_attempt",
+		slog.String("addr", addr),
+		slog.Bool("ok", ok),
+		slog.Int64("took_ms", took.Milliseconds()))
 }
 
 // logTransition records only the edges. Logging every probe would bury the

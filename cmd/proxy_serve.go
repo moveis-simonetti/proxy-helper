@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 var (
 	servePort           int
 	serveQuiet          bool
+	serveDebug          bool
 	serveDockerBridge   bool
 	serveNoDockerBridge bool
 	serveInstallDry     bool
@@ -35,7 +37,16 @@ var proxyServeCmd = &cobra.Command{
 		"This runs in the foreground; use \"proxy serve install\" to run it as a " +
 		"systemd user service.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger := serve.NewLogger(os.Stdout, serveQuiet)
+		logLevel := slog.LevelInfo
+		switch {
+		case serveDebug:
+			// --debug wins over --quiet: asking for per-probe-attempt
+			// detail implies wanting more, not less.
+			logLevel = slog.LevelDebug
+		case serveQuiet:
+			logLevel = slog.LevelWarn
+		}
+		logger := serve.NewLoggerLevel(os.Stdout, logLevel)
 
 		pf, err := proxy.LoadProfiles()
 		if err != nil {
@@ -176,7 +187,7 @@ var proxyServeInstallCmd = &cobra.Command{
 			return err
 		}
 
-		if err := serve.InstallUnit(ex, execPath, servePort, dockerBridge); err != nil {
+		if err := serve.InstallUnit(ex, execPath, servePort, dockerBridge, serveDebug); err != nil {
 			return err
 		}
 		if !serveInstallDry {
@@ -278,8 +289,10 @@ func init() {
 	proxyServeCmd.Flags().IntVar(&servePort, "port", proxy.DefaultLocalPort, "port to listen on (loopback, plus the Docker bridge with --docker-bridge)")
 	proxyServeCmd.Flags().BoolVar(&serveDockerBridge, "docker-bridge", false, "also listen on the Docker bridge so build containers can reach the proxy; this lets every container on the machine use it")
 	proxyServeCmd.Flags().BoolVar(&serveQuiet, "quiet", false, "log only warnings and errors instead of every request")
+	proxyServeCmd.Flags().BoolVar(&serveDebug, "debug", false, "also log every individual reachability probe attempt (mode auto), not just up/down transitions; overrides --quiet")
 	proxyServeInstallCmd.Flags().IntVar(&servePort, "port", proxy.DefaultLocalPort, "port the service should listen on")
 	proxyServeInstallCmd.Flags().BoolVar(&serveDockerBridge, "docker-bridge", false, "also listen on the Docker bridge so build containers can reach the proxy; this lets every container on the machine use it")
+	proxyServeInstallCmd.Flags().BoolVar(&serveDebug, "debug", false, "also log every individual reachability probe attempt (mode auto), not just up/down transitions; not persisted, so a later reinstall without this flag turns it back off")
 	proxyServeInstallCmd.Flags().BoolVar(&serveNoDockerBridge, "no-docker-bridge", false, "stop listening on the Docker bridge and clear the saved preference")
 	proxyServeInstallCmd.Flags().BoolVar(&serveInstallDry, "dry-run", false, "print what would change without applying it")
 	proxyServeUninstallCmd.Flags().BoolVar(&serveUninstallDry, "dry-run", false, "print what would change without applying it")

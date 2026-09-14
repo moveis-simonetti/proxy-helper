@@ -3,6 +3,7 @@ package serve
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 )
 
@@ -76,6 +77,62 @@ func refuseRoutableAddr(host string) error {
 		return nil
 	}
 	return fmt.Errorf("refusing to listen on %s: it is publicly routable, and this proxy does not authenticate its clients", host)
+}
+
+// dockerBridgeInterfaceName matches every bridge network Docker creates on
+// the host: "docker0" for the default bridge, "br-<12 hex chars>" for every
+// user-defined one (what "docker network create" and every compose project
+// get). Reading interface names needs no docker CLI or socket access — the
+// same reason DockerBridgeAddr above does it this way instead of shelling
+// out.
+var dockerBridgeInterfaceName = regexp.MustCompile(`^(docker0|br-[0-9a-f]{12})$`)
+
+// DockerNetworkSubnets returns the CIDR of every Docker bridge network on
+// this host. A failure to list interfaces is returned; a single interface
+// with no usable address is just skipped, since a network can exist without
+// a container ever having pulled an address from it.
+//
+// This exists to keep container-to-container traffic off this proxy: once
+// --docker-bridge is on, any container can reach this daemon, and if a
+// container's own HTTP_PROXY points here without its NO_PROXY excluding its
+// own network, a call to a sibling container by IP gets forwarded to
+// whatever upstream is configured instead of staying on the host — Docker
+// itself never routes inter-network traffic through an HTTP proxy, so there
+// is no case where forwarding it here is what anyone wanted.
+// lookupDockerNetworkSubnets is DockerNetworkSubnets behind a variable so
+// loadSnapshot's use of it can be swapped out in tests without depending on
+// this host actually having Docker networks to discover.
+var lookupDockerNetworkSubnets = DockerNetworkSubnets
+
+func DockerNetworkSubnets() ([]string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("listing network interfaces: %w", err)
+	}
+	var subnets []string
+	for _, iface := range ifaces {
+		if !dockerBridgeInterfaceName.MatchString(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil {
+				continue
+			}
+			// iface.Addrs() carries the interface's own address (e.g.
+			// 172.19.0.1/16), not the network's base address; mask it down
+			// to a proper CIDR (172.19.0.0/16) so it reads correctly
+			// wherever the no-proxy list is displayed, not just where it is
+			// matched.
+			network := &net.IPNet{IP: ipnet.IP.Mask(ipnet.Mask), Mask: ipnet.Mask}
+			subnets = append(subnets, network.String())
+		}
+	}
+	return subnets, nil
 }
 
 // DockerTargets are the targets whose config is consumed from inside a

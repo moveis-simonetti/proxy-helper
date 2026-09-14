@@ -36,6 +36,30 @@ func TestRefuseRoutableAddr(t *testing.T) {
 	}
 }
 
+func TestDockerBridgeInterfaceNameMatchesDockerNetworks(t *testing.T) {
+	for _, ok := range []string{"docker0", "br-1a2b3c4d5e6f", "br-000000000000"} {
+		if !dockerBridgeInterfaceName.MatchString(ok) {
+			t.Errorf("%q should match a Docker bridge interface", ok)
+		}
+	}
+	for _, bad := range []string{"eth0", "wlp0s20f3", "lo", "docker1", "br-1a2b3c4d5e6", "br-1a2b3c4d5e6fx", "veth1234abcd"} {
+		if dockerBridgeInterfaceName.MatchString(bad) {
+			t.Errorf("%q should not match a Docker bridge interface", bad)
+		}
+	}
+}
+
+// The real lookup depends on this host's actual interfaces, so this only
+// guards that it degrades to "nothing found," never an error, on a machine
+// with no Docker bridges at all — loadSnapshot treats an error as
+// non-fatal, but there is no reason a plain absence should even reach that
+// path.
+func TestDockerNetworkSubnetsNeverErrors(t *testing.T) {
+	if _, err := DockerNetworkSubnets(); err != nil {
+		t.Errorf("DockerNetworkSubnets: %v", err)
+	}
+}
+
 func TestIsDockerTarget(t *testing.T) {
 	for _, name := range []string{"dockerd", "docker-config"} {
 		if !IsDockerTarget(name) {

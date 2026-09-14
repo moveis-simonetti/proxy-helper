@@ -140,6 +140,37 @@ func TestEnableLeavesTargetsAloneWhenAlreadyPlumbed(t *testing.T) {
 	}
 }
 
+// The one exception to route 2's "touch nothing" rule: nm-connectivity's
+// content is the profile's own (ConnectivityCheckURL/Response), not the
+// daemon's address, so switching to a profile that leaves it unset must
+// still clean up a previous profile's file — Status reporting Enabled:true
+// stands in for that stale file existing on disk (see nmConnectivityTarget,
+// whose Status really does read one).
+func TestEnableCleansUpAStaleTargetOnAnUnconfiguredProfile(t *testing.T) {
+	isolateConfig(t, `{"via_local":true,"profiles":{
+		"corp":{"host":"p.example"},
+		"other":{"host":"o.example"}}}`)
+
+	tg := &fakeTarget{name: "nm-connectivity", available: true, enabled: true}
+	d := depsFor(tg)
+	d.ReloadDaemon = func(*proxy.Executor) error { return nil }
+
+	res, err := Enable(d, &proxy.Executor{}, "other", []string{"all"}, false)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if res.TargetsUntouched {
+		t.Error("TargetsUntouched = true, want false: a stale file needed cleaning up")
+	}
+	if len(tg.setCfgs) != 1 {
+		t.Fatalf("nm-connectivity Set called %d times, want 1", len(tg.setCfgs))
+	}
+	if tg.setCfgs[0].ConnectivityCheckURL != "" {
+		t.Errorf("Set received ConnectivityCheckURL %q, want empty — \"other\" never configured one",
+			tg.setCfgs[0].ConnectivityCheckURL)
+	}
+}
+
 // Route 3: the activation is recorded before any target is touched. A target
 // failing for a mundane reason used to leave the machine with everything
 // configured and no active profile — the partial state this tool exists to

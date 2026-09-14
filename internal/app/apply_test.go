@@ -16,12 +16,16 @@ type fakeTarget struct {
 	root          bool
 	sessionScoped bool
 	available     bool
-	setCfgs       []proxy.Config
-	unsets        int
-	setErr        error
-	unsetErr      error
-	statusErr     error
-	statusCalls   int
+	// enabled is returned as Status.Enabled — e.g. a target backed by a
+	// file on disk that a previous Set already wrote, exercised by
+	// TestEnableCleansUpAStaleTargetOnAnUnconfiguredProfile.
+	enabled     bool
+	setCfgs     []proxy.Config
+	unsets      int
+	setErr      error
+	unsetErr    error
+	statusErr   error
+	statusCalls int
 	// statusDetail, when set, is returned as Status.Detail — mirroring the
 	// reason a real target like kde/lxd/snap gives for being unavailable.
 	statusDetail string
@@ -65,7 +69,7 @@ func (f *fakeTarget) Status(ex *proxy.Executor, elevate bool) (proxy.Status, err
 	if f.statusErr != nil {
 		return proxy.Status{}, f.statusErr
 	}
-	return proxy.Status{Name: f.name, Available: f.available, Detail: f.statusDetail}, nil
+	return proxy.Status{Name: f.name, Available: f.available, Enabled: f.enabled, Detail: f.statusDetail}, nil
 }
 
 func depsFor(targets ...*fakeTarget) Deps {

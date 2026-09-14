@@ -229,6 +229,32 @@ func TestProfileEnableWithPlumbingTouchesNoTarget(t *testing.T) {
 	}
 }
 
+// TestProfileEnableWithPlumbingStillAppliesConnectivityCheck is the
+// exception to the test above: nm-connectivity's content depends on which
+// profile is active (its own ConnectivityCheckURL/Response), not on where
+// the plumbing points, so route 2 has to reapply it even though every other
+// target stays untouched. Regression test for the profile switch that used
+// to leave NetworkManager's connectivity check pointed at the network the
+// user just switched away from.
+func TestProfileEnableWithPlumbingStillAppliesConnectivityCheck(t *testing.T) {
+	h := newHarness(t, `{"active_profile":"work","via_local":true,"profiles":{
+		"work":{"scheme":"http","host":"proxy.corp","port":"8080"},
+		"home":{"scheme":"http","host":"home.proxy","port":"3128","connectivity_check_url":"http://192.168.1.1/","connectivity_check_response":"<html>"}}}`)
+	resetProfileFlags(t)
+
+	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"home"}); err != nil {
+		t.Fatalf("profile enable: %v", err)
+	}
+
+	if got := h.sets(); len(got) == 0 {
+		t.Fatal("profile enable must still apply nm-connectivity when the profile configures it")
+	}
+	pf := h.profiles(t)
+	if !pf.ViaLocal {
+		t.Error("applying nm-connectivity must not tear down the plumbing for every other target")
+	}
+}
+
 // TestProfileEnableWithoutPlumbingStillAppliesTheRealConfig keeps the
 // escape hatch intact for anyone not running the daemon.
 func TestProfileEnableWithoutPlumbingStillAppliesTheRealConfig(t *testing.T) {

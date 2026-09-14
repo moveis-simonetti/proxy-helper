@@ -225,7 +225,19 @@ fi
 # is the CLI default now, and without --no-via-local this would refuse with
 # "the local proxy is not running" instead of just pointing these three at
 # the loopback address the daemon will be listening on once it does start.
-if command -v proxy-helper >/dev/null 2>&1; then
+#
+# $2 (the previously configured version, per the dpkg maintainer script
+# convention) is empty only on a genuinely first install. Guarded on that:
+# this writes a flat 127.0.0.1, not the Docker bridge address dockerd may
+# already have been given (docker_bridge on, then a manual "proxy set" or
+# the GUI pointed it at the bridge) — running this unconditionally on every
+# reinstall/upgrade silently stomped that choice back to loopback every
+# time, which is what the daemon self-apply pattern elsewhere in this
+# codebase (see cmd/proxy_serve_selfapply.go) exists specifically to avoid
+# for the targets it owns. A machine already bootstrapped once does not
+# need this block run again; whatever these three targets say now is
+# whatever the user (or a later "proxy set") already decided.
+if command -v proxy-helper >/dev/null 2>&1 && [ -z "$2" ]; then
 	proxy-helper proxy set --targets apt,system-env,dockerd --host 127.0.0.1 --port 8888 --no-via-local || true
 fi
 
@@ -243,6 +255,38 @@ set -e
 # whole span of the upgrade.
 if [ "$1" = "remove" ] && command -v proxy-helper >/dev/null 2>&1; then
 	proxy-helper proxy unset --targets apt,system-env,dockerd || true
+
+	# Mirrors the "|| true" pattern postinst uses for the same enable:
+	# undoing this is best effort, not a reason to fail the removal.
+	# Without it, every future login keeps starting a daemon whose binary
+	# this script is about to delete.
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl --global disable proxy-helper.service || true
+	fi
+
+	# The other side of the "best effort for whoever is ALREADY logged in
+	# right now" loop postinst runs: "proxy purge" undoes, per user,
+	# everything the daemon self-apply and any later "proxy set"/GUI use
+	# built up — the systemd --user unit, config.json, and every USER-level
+	# target (shell, session-env, git, npm, vscode, gnome, kde,
+	# docker-config). Explicitly excludes apt, system-env and dockerd:
+	# those are the ones already undone, once, as root, above — running
+	# "proxy purge" as a plain user under runuser has no sudo TTY to
+	# elevate through, so asking it to also touch the privileged targets
+	# would just hang or fail, not skip cleanly. Same limit postinst
+	# already accepts: only whoever is logged in right now is reachable
+	# this way; anyone else simply finds the daemon gone at the next login
+	# (the --global disable above), with no targets left pointing at it.
+	if command -v systemctl >/dev/null 2>&1; then
+		for uid in $(loginctl list-sessions --no-legend 2>/dev/null | awk "{print \$2}" | sort -u); do
+			user="$(id -un "$uid" 2>/dev/null)" || continue
+			[ -n "$user" ] || continue
+			runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" \
+				proxy-helper proxy purge \
+				--targets shell,session-env,git,npm,vscode,gnome,kde,docker-config \
+				2>/dev/null || true
+		done
+	fi
 fi
 
 exit 0

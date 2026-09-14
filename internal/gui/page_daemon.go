@@ -216,7 +216,10 @@ func newDaemonStrandedBar(onRemove func()) (*gtk.InfoBar, *gtk.Label, *gtk.Butto
 // setupDaemonPage fills win.DaemonPage (built empty by newWindow) with the
 // service block described by the task brief: a formGrid of read-only rows
 // (Estado/Escutando/Perfil) plus the Porta control, the bridge switch and
-// its warning, and the install/apply/remove/reload buttons.
+// its warning, "Recarregar" and the single "Salvar" primary button (visible
+// only once the daemon is installed — notInstalledLbl replaces the row with
+// a static message otherwise), plus the Stranded/Outdated warning bar that
+// now also holds "Remover serviço".
 func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	dp := &daemonPage{runner: r, topWindow: win.Window}
 
@@ -389,6 +392,9 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Same ShowAll trap as every other conditionally-hidden widget in this
+	// package (see notInstalledLbl below): SetNoShowAll BEFORE SetVisible.
+	primaryBtn.SetNoShowAll(true)
 	primaryBtn.Connect("clicked", func() { dp.applyPrimary() })
 	buttons.PackStart(primaryBtn, false, false, 0)
 	dp.primaryBtn = primaryBtn
@@ -642,6 +648,7 @@ func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, b
 	// only fail.
 	dp.portSpin.SetSensitive(installed)
 	dp.bridgeSwitch.SetSensitive(installed && bridgeAvailable)
+	dp.reloadBtn.SetSensitive(installed)
 	dp.primaryBtn.SetVisible(installed)
 	dp.notInstalledLbl.SetVisible(!installed)
 
@@ -688,13 +695,13 @@ func (dp *daemonPage) setStrandedVisible(installed bool, h app.DaemonHealth) {
 	}
 }
 
-// applyPrimary installs the service (not yet installed) or reinstalls it
-// with the pending port/bridge changes (already installed) — InstallUnit
-// itself only restarts a running unit, so this one call correctly covers
-// both "Instalar serviço" and "Aplicar alterações". Port and bridge are read
-// on the UI thread, right before submit, and captured — reading a widget
-// from the runner's worker goroutine is the bug page_status.go's apply()
-// doc comment already warns about.
+// applyPrimary is "Salvar": primaryBtn is visible only when the daemon is
+// already installed (see applyLoad), so this always reinstalls the unit
+// with the pending port/bridge changes — InstallUnit itself only restarts a
+// running unit, which is exactly what "Salvar" needs. Port and bridge are
+// read on the UI thread, right before submit, and captured — reading a
+// widget from the runner's worker goroutine is the bug page_status.go's
+// apply() doc comment already warns about.
 func (dp *daemonPage) applyPrimary() {
 	form := dp.readForm()
 	wasInstalled := dp.installed

@@ -25,6 +25,38 @@ func TestValidateProfileFormRequiresAHost(t *testing.T) {
 	}
 }
 
+func TestValidateProfileFormRequiresResponseWhenConnCheckURLIsSet(t *testing.T) {
+	_, _, msg := validateProfileForm(profileFormValues{
+		Name: "corp", Host: "p.example", ConnCheckURL: "http://p.example/",
+	}, nil, "")
+	if msg == "" {
+		t.Fatal("aceitou uma URL de checagem sem a resposta esperada")
+	}
+}
+
+func TestValidateProfileFormAcceptsConnCheckFields(t *testing.T) {
+	_, cfg, msg := validateProfileForm(profileFormValues{
+		Name: "corp", Host: "p.example",
+		ConnCheckURL: "http://p.example/", ConnCheckResponse: "<html>",
+	}, nil, "")
+	if msg != "" {
+		t.Fatalf("recusou campos válidos: %q", msg)
+	}
+	if cfg.ConnectivityCheckURL != "http://p.example/" || cfg.ConnectivityCheckResponse != "<html>" {
+		t.Errorf("Config = %+v, campos de checagem não repassados", cfg)
+	}
+}
+
+func TestValidateProfileFormAllowsBothConnCheckFieldsBlank(t *testing.T) {
+	_, cfg, msg := validateProfileForm(profileFormValues{Name: "corp", Host: "p.example"}, nil, "")
+	if msg != "" {
+		t.Fatalf("recusou um perfil sem checagem de conectividade: %q", msg)
+	}
+	if cfg.ConnectivityCheckURL != "" || cfg.ConnectivityCheckResponse != "" {
+		t.Errorf("Config = %+v, esperava os dois campos vazios", cfg)
+	}
+}
+
 func TestValidateProfileFormRejectsADuplicateName(t *testing.T) {
 	existing := map[string]proxy.Config{"corp": {Host: "p.example"}}
 	_, _, msg := validateProfileForm(profileFormValues{Name: "corp", Host: "o.example"}, existing, "")

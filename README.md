@@ -176,16 +176,36 @@ NetworkManager.
 Sem `connectivity_check_url` configurado (o padrão), esse target não faz
 nada — nenhum `sudo`, nenhum arquivo escrito.
 
-**É específico da rede, não da máquina.** A URL só responde sem proxy
-*naquela* rede; em qualquer outra (casa, hotspot, outro escritório), a
-checagem vai falhar de novo e o ícone volta a mostrar "limitada" — mesmo com
-internet de verdade — porque a configuração continua apontando para uma URL
-que só existe na rede antiga. Não tem como isso ser automático: se você usa
-mais de uma rede que precisa de proxy, configure
-`--connectivity-check-url`/`--connectivity-check-response` em cada perfil
-correspondente, e troque de perfil (`proxy profile enable <nome>`, não só
-`proxy set`) ao trocar de rede — trocar de perfil já limpa a checagem
-antiga automaticamente, mesmo que o novo perfil não configure uma própria.
+**Se ajusta sozinho a troca de rede.** A URL só responde sem proxy naquela
+rede específica; em qualquer outra (casa, hotspot, outro escritório), ela
+fica inalcançável. Por isso o `Set` também instala um *dispatcher script* do
+NetworkManager (`/etc/NetworkManager/dispatcher.d/90-proxy-helper-connectivity`)
+que roda a cada troca de rede (`up`/`connectivity-change`) e testa a URL de
+verdade — se responder, garante a configuração ativa; se não, remove
+(deixando o NetworkManager cair de volta na checagem padrão dele, que
+funciona normalmente em qualquer rede com internet direta). O script chama
+`proxy-helper sync-connectivity` (comando interno) como `root`, então grava
+o `HOME`/`XDG_CONFIG_HOME` de quem configurou na hora do `Set` — `root` não
+tem `config.json` próprio, e adivinhar "o usuário logado agora" seria errado
+numa máquina com mais de uma conta.
+
+`proxy off` e `proxy mode direct` também acompanham isso: se o perfil ativo
+tiver `connectivity_check_url` configurado, ir para o modo direto limpa a
+checagem (faz sentido — sem proxy, a rede volta a ser genuinamente
+"limitada" para quem depende dele), e sair do direto a reaplica. É a única
+exceção à promessa de "sem sudo, instantâneo" desses dois comandos — sem o
+campo configurado, continuam exatamente como sempre foram.
+
+Trocar de perfil (`proxy profile enable <nome>`) também limpa a checagem
+antiga automaticamente ao sair de um perfil que a configurava, mesmo que o
+novo não configure uma própria.
+
+`proxy off` e `proxy mode direct` também acompanham isso: se o perfil ativo
+tiver `connectivity_check_url` configurado, ir para o modo direto limpa a
+checagem (faz sentido — sem proxy, a rede volta a ser genuinamente
+"limitada" para quem depende dele), e sair do direto a reaplica. É a única
+exceção à promessa de "sem sudo, instantâneo" desses dois comandos — sem o
+campo configurado, continuam exatamente como sempre foram.
 
 ## Uso pontual
 

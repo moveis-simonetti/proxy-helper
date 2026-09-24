@@ -310,6 +310,18 @@ func (e *Executor) WritePrivilegedFile(path string, content []byte, perm os.File
 	if err := tee.Run(); err != nil {
 		return wrapWithStderr(err, teeErr.String())
 	}
+	// tee always creates the file at the umask's default (typically 0644),
+	// ignoring perm entirely — every caller before nm-connectivity's
+	// dispatcher script happened to want exactly that, which is what let
+	// this go unnoticed: the IsRoot() branch above honours perm correctly,
+	// only this escalated path did not.
+	chmod := exec.Command(via, "chmod", fmt.Sprintf("%o", perm), path)
+	var chmodErr bytes.Buffer
+	chmod.Stdout = e.out()
+	chmod.Stderr = io.MultiWriter(e.stderr(), &chmodErr)
+	if err := chmod.Run(); err != nil {
+		return wrapWithStderr(err, chmodErr.String())
+	}
 	return nil
 }
 

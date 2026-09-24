@@ -18,7 +18,11 @@ var proxyModeCmd = &cobra.Command{
 		"  upstream  always forward; never let traffic out any other way\n" +
 		"  direct    never forward; send everything straight out\n\n" +
 		"Targets keep pointing at the local proxy either way, so switching " +
-		"needs no sudo, rewrites no configuration and takes effect at once. " +
+		"needs no sudo, rewrites no configuration and takes effect at once — " +
+		"except for nm-connectivity, when the active profile configures one: " +
+		"that target's NetworkManager connectivity check is cleared going " +
+		"into direct and reapplied coming back out, since it is only valid " +
+		"while traffic is actually proxied. " +
 		"Run without an argument to print the current mode.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

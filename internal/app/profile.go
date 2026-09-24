@@ -30,11 +30,15 @@ type OffResult struct {
 // privilege and takes effect as soon as the daemon re-reads its config.
 func On(d Deps, ex *proxy.Executor, name string) (OnResult, error) {
 	var res OnResult
+	var snapshot *proxy.ProfileFile
+	var oldMode proxy.Mode
 	err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+		oldMode = pf.EffectiveMode()
 		if err := pf.On(name); err != nil {
 			return err
 		}
 		res.Profile = pf.ActiveProfile
+		snapshot = pf
 		return nil
 	})
 	if err != nil {
@@ -46,24 +50,29 @@ func On(d Deps, ex *proxy.Executor, name string) (OnResult, error) {
 	if err := d.ReloadDaemon(ex); err != nil {
 		return OnResult{}, err
 	}
+	syncConnectivityCheck(d, ex, snapshot, oldMode, snapshot.EffectiveMode())
 	return res, nil
 }
 
 // Off clears the active profile so the daemon sends everything direct. Like
-// On, it touches no target.
+// On, it touches no target — with one exception: see syncConnectivityCheck.
 func Off(d Deps, ex *proxy.Executor) (OffResult, error) {
 	var res OffResult
+	var snapshot *proxy.ProfileFile
+	var oldMode proxy.Mode
 	err := proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
 		// Keyed on the mode, not on ActiveProfile: the profile stays
 		// selected while traffic goes direct, so an empty selection no
 		// longer means "already off" — and a config with a profile
 		// selected but mode direct is exactly the already-off case.
-		if pf.EffectiveMode() == proxy.ModeDirect {
+		oldMode = pf.EffectiveMode()
+		if oldMode == proxy.ModeDirect {
 			res.AlreadyOff = true
 			return nil
 		}
 		res.Previous = pf.ActiveProfile
 		pf.Off()
+		snapshot = pf
 		return nil
 	})
 	if err != nil {
@@ -75,6 +84,7 @@ func Off(d Deps, ex *proxy.Executor) (OffResult, error) {
 	if err := d.ReloadDaemon(ex); err != nil {
 		return OffResult{}, err
 	}
+	syncConnectivityCheck(d, ex, snapshot, oldMode, proxy.ModeDirect)
 	return res, nil
 }
 

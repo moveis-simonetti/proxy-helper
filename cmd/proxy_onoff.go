@@ -14,7 +14,11 @@ var proxyOffCmd = &cobra.Command{
 	Short: "Route everything direct without touching any target",
 	Long: "Clear the active profile so the local proxy sends every request " +
 		"direct. Targets keep pointing at the local proxy, so this needs no " +
-		"sudo and takes effect immediately. Use \"proxy on\" to go back.",
+		"sudo and takes effect immediately — except for nm-connectivity, when " +
+		"the active profile configures one (see \"proxy profile edit " +
+		"--connectivity-check-url\"): that one target's check has to be " +
+		"cleared, since it is only valid while traffic is actually proxied. " +
+		"Use \"proxy on\" to go back.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		res, err := app.Off(deps(), &proxy.Executor{})
 		if err != nil {

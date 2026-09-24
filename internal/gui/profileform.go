@@ -18,6 +18,10 @@ import (
 // exactly as typed, before any interpretation.
 type profileFormValues struct {
 	Name, Scheme, Host, Port, User, Pass, NoProxy string
+	// ConnCheckURL/ConnCheckResponse configure nm-connectivity (see
+	// internal/proxy/nmconnectivity.go): both blank, the default, leaves
+	// NetworkManager's own connectivity check untouched.
+	ConnCheckURL, ConnCheckResponse string
 }
 
 // validateProfileForm turns what the user typed into a Config, or returns
@@ -58,13 +62,21 @@ func validateProfileForm(v profileFormValues, existing map[string]proxy.Config, 
 
 	noProxy := splitNoProxy(v.NoProxy)
 
+	connCheckURL := strings.TrimSpace(v.ConnCheckURL)
+	connCheckResponse := v.ConnCheckResponse
+	if connCheckURL != "" && strings.TrimSpace(connCheckResponse) == "" {
+		return "", proxy.Config{}, "Preencha \"Resposta esperada\" — sem ela, o NetworkManager não tem como saber se a URL de checagem respondeu com sucesso."
+	}
+
 	cfg = proxy.Config{
-		Scheme:   scheme,
-		Host:     v.Host,
-		Port:     v.Port,
-		Username: v.User,
-		Password: v.Pass,
-		NoProxy:  noProxy,
+		Scheme:                    scheme,
+		Host:                      v.Host,
+		Port:                      v.Port,
+		Username:                  v.User,
+		Password:                  v.Pass,
+		NoProxy:                   noProxy,
+		ConnectivityCheckURL:      connCheckURL,
+		ConnectivityCheckResponse: connCheckResponse,
 	}
 	return name, cfg, ""
 }

@@ -7,6 +7,7 @@ package gui
 
 import (
 	"fmt"
+	"strings"
 
 	"proxy-helper/internal/serve"
 )
@@ -82,13 +83,20 @@ func formatStatus(status int, errText string) string {
 // daemonSummary is the service block's read-only text.
 type daemonSummary struct {
 	State   string // "Ativo" | "Parado" | "Não instalado"
-	Listen  string // "127.0.0.1:8888" (+ bridge address when enabled)
+	Listen  string // observed addresses, or "—" when bound to none
 	Profile string // active profile, or "nenhum"
 }
 
 // summarize formats the service block's read-only text from the daemon's
 // current state.
-func summarize(active, installed bool, port int, bridgeAddr string, activeProfile string) daemonSummary {
+//
+// listening is what serve.ListeningAddrs actually observed on the machine.
+// The configured port is deliberately not an argument: deriving this line
+// from config was the bug. A unit installed without --docker-bridge
+// alongside a config saying docker_bridge:true made this field advertise a
+// bridge address nothing was bound to, and a user hitting the opposite case
+// had no way to see it from here.
+func summarize(active, installed bool, listening []string, activeProfile string) daemonSummary {
 	state := "Não instalado"
 	switch {
 	case active:
@@ -97,9 +105,11 @@ func summarize(active, installed bool, port int, bridgeAddr string, activeProfil
 		state = "Parado"
 	}
 
-	listen := fmt.Sprintf("127.0.0.1:%d", port)
-	if bridgeAddr != "" {
-		listen += ", " + bridgeAddr
+	// Nothing answering is a real answer, and the honest one for a stopped
+	// or uninstalled service. State already says which of those it is.
+	listen := "—"
+	if len(listening) > 0 {
+		listen = strings.Join(listening, ", ")
 	}
 
 	profile := activeProfile
@@ -131,16 +141,11 @@ func daemonPending(baseline, current daemonFormValues) bool {
 	return baseline != current
 }
 
-// daemonPrimaryActionLabel is what the service block's primary button says.
-// Named distinctly from profileform.go's primaryActionLabel: that one is the
-// Perfis form's own button label and takes a formMode, an unrelated concept
-// to this page's installed/not-installed state.
-func daemonPrimaryActionLabel(installed bool) string {
-	if installed {
-		return "Aplicar alterações"
-	}
-	return "Instalar serviço"
-}
+// daemonSaveLabel is what the service block's single button says now that
+// installing is no longer something the GUI offers (see page_daemon.go's
+// setupDaemonPage doc comment) — there is only ever one action left:
+// resending the port/bridge form to a daemon that is already there.
+const daemonSaveLabel = "Salvar"
 
 // sameRows reports whether two consecutive reads produced identical tables.
 //
@@ -162,4 +167,70 @@ func sameRows(a, b []logRow) bool {
 		}
 	}
 	return true
+}
+
+// portChangeStrandsTargets reports whether changing the daemon's port left
+// the targets behind.
+//
+// applyPrimary tries to re-apply every target itself (reapplyAllTargets)
+// whenever the port changes, and portChangeStrandsTargets is what decides
+// whether that is even necessary. It still names the gap this warning
+// exists for: reapplyAllTargets only runs when the targets are already
+// plumbed to the daemon and a profile is active — outside that, every
+// target keeps the old port until the user applies by hand on the Status
+// page, and the failure shows up later, detached from the change that
+// caused it. staleTargetsWarning is what applyPrimary falls back to then.
+func portChangeStrandsTargets(oldPort, newPort int) bool {
+	return oldPort != newPort
+}
+
+// staleTargetsWarning explains the situation portChangeStrandsTargets
+// detects, for applyPrimary's fallback path (reapplyAllTargets could not
+// run). It names both ports: what the targets still say, and what they
+// should say — without which the user cannot tell whether a later failure
+// is this or something else.
+func staleTargetsWarning(oldPort, newPort int) string {
+	return fmt.Sprintf(
+		"os alvos ainda apontam para a porta %d, não para %d — reaplique na aba Status",
+		oldPort, newPort)
+}
+
+// staleBridgeWarning is staleTargetsWarning's counterpart for a
+// docker_bridge change applyPrimary could not reapply automatically
+// (reapplyAllTargets came back not-ok): dockerd/docker-config keep
+// pointing at whichever address they had before, until reapplied by hand.
+// No port numbers to name here — docker_bridge is a bool, not a moving
+// target — so the message stays generic on purpose.
+func staleBridgeWarning() string {
+	return "a bridge do Docker mudou, mas dockerd/docker-config ainda apontam para o endereço antigo — reaplique na aba Status"
+}
+
+// daemonApplyMessage builds the line applyPrimary shows after saving. The
+// warning rides along with the confirmation rather than in a widget of its
+// own: it belongs to the action the user just took, and a second label
+// competing with this one is a label nobody reads.
+func daemonApplyMessage(wasInstalled bool, warning string) string {
+	msg := "serviço instalado"
+	if wasInstalled {
+		msg = "alterações aplicadas"
+	}
+	if warning != "" {
+		msg += " — " + warning
+	}
+	return msg
+}
+
+// daemonPendingNotice is the line shown while the form holds changes that
+// were never sent to the system.
+//
+// The bridge switch and the port field change intent only; the Salvar
+// button applies them. That is the design, but the sole feedback used to be
+// that button quietly turning sensitive — and a user who turned the bridge
+// switch on, closed the window, and never pressed it reported the feature as
+// broken. Saying it in words, next to the control, is the fix.
+func daemonPendingNotice(pending bool) string {
+	if !pending {
+		return ""
+	}
+	return fmt.Sprintf("alterações não aplicadas — clique em %q", daemonSaveLabel)
 }

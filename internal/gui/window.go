@@ -4,6 +4,7 @@ package gui
 
 import (
 	"github.com/gotk3/gotk3/gtk"
+	"proxy-helper/internal/proxy"
 )
 
 // window is the GUI's shell: the headerbar (profile selector, page
@@ -16,6 +17,8 @@ type window struct {
 	Stack        *gtk.Stack
 	ProfileCombo *gtk.ComboBoxText
 	MasterSwitch *gtk.Switch
+	// AutoCheck is the "auto" lock beside the switch.
+	AutoCheck    *gtk.CheckButton
 	StatusLabel  *gtk.Label
 	StatusPage   *gtk.Box
 	ProfilesPage *gtk.Box
@@ -35,18 +38,6 @@ type window struct {
 	// so it works correctly in both windows: before Tray is set, and on a
 	// desktop where it is permanently nil.
 	Tray *tray
-}
-
-// masterLabel derives the Portuguese wording for the master switch's label
-// from the switch's own state, so the header never shows a label and a
-// switch position that contradict each other. It is the single place that
-// maps switch state to label text — the task that wires the toggle should
-// call this rather than inventing its own mapping.
-func masterLabel(active bool) string {
-	if active {
-		return "Ativo"
-	}
-	return "Direto"
 }
 
 // newWindow builds the window shell and wires its destroy handler to drain
@@ -103,11 +94,18 @@ func newWindow(r *runner) (*window, error) {
 		return nil, err
 	}
 
-	statusLabel, err := gtk.LabelNew(masterLabel(masterSwitch.GetActive()))
+	statusLabel, err := gtk.LabelNew(modeLabel(proxy.ModeDirect, false))
 	if err != nil {
 		return nil, err
 	}
-	statusLabel.SetTooltipText(masterLabel(masterSwitch.GetActive()))
+
+	// The lock is what lets two widgets carry three modes. With it on the
+	// switch stops being an input and becomes a readout of what the daemon
+	// is actually doing — see modeSwitchState.
+	autoCheck, err := gtk.CheckButtonNewWithLabel("auto")
+	if err != nil {
+		return nil, err
+	}
 
 	// 0 here is deliberate, not a stray literal: BoxNew's spacing argument is
 	// only a convenience for the common case, and this box sets its real
@@ -117,6 +115,7 @@ func newWindow(r *runner) (*window, error) {
 		return nil, err
 	}
 	switchBox.SetSpacing(spaceTight)
+	switchBox.PackStart(autoCheck, false, false, 0)
 	switchBox.PackStart(statusLabel, false, false, 0)
 	switchBox.PackStart(masterSwitch, false, false, 0)
 	hb.PackEnd(switchBox)
@@ -183,6 +182,7 @@ func newWindow(r *runner) (*window, error) {
 		Stack:        stack,
 		ProfileCombo: profileCombo,
 		MasterSwitch: masterSwitch,
+		AutoCheck:    autoCheck,
 		StatusLabel:  statusLabel,
 		StatusPage:   statusPage,
 		ProfilesPage: profilesPage,

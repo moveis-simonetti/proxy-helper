@@ -104,6 +104,12 @@ func SaveProfile(d Deps, ex *proxy.Executor, resolve func(existing map[string]pr
 		// use, so that case is already excluded by the second condition.
 		if !existed && pf.ActiveProfile == "" && namedProfiles(pf.Profiles) == 1 {
 			pf.ActiveProfile = name
+			pf.LastProfile = name
+			// Auto, not upstream: with the targets always pointed at the
+			// daemon (see ApplyUserTargets/selfApplyUserTargets), there is
+			// no "legacy direct-write" behaviour left to preserve here —
+			// auto is simply the product's default routing.
+			pf.Mode = string(proxy.ModeAuto)
 		}
 
 		wasActive = pf.ActiveProfile == name

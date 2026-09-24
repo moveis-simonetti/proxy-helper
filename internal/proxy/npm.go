@@ -52,12 +52,18 @@ func (t *npmTarget) Set(ex *Executor, cfg Config) error {
 		return err
 	}
 	lines = filterNpmrcKeys(lines, npmProxyKeys)
+	var added []string
 	for _, key := range []string{"proxy", "https-proxy", "noproxy"} {
 		if v, ok := values[key]; ok {
-			lines = append(lines, fmt.Sprintf("%s=%s", key, v))
+			added = append(added, fmt.Sprintf("%s=%s", key, v))
 		}
 	}
-	return ex.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	lines = append(lines, added...)
+	// Preview only the lines this target owns. .npmrc holds registry auth
+	// tokens, and echoing the merged file would print them for anyone who
+	// merely asked what the command would do.
+	return ex.WriteFilePreview(path, []byte(strings.Join(lines, "\n")+"\n"),
+		strings.Join(added, "\n"), 0o644)
 }
 
 func (t *npmTarget) Unset(ex *Executor) error {

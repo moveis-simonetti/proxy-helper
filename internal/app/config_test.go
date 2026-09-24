@@ -201,8 +201,12 @@ func TestSaveProfileActivatesTheFirstOne(t *testing.T) {
 	if err := salvar(t, "Trabalho", proxy.Config{Host: "p", Port: "1"}); err != nil {
 		t.Fatalf("SaveProfile: %v", err)
 	}
-	if got := perfis(t).ActiveProfile; got != "Trabalho" {
-		t.Errorf("active_profile = %q, queria o primeiro perfil ativo", got)
+	pf := perfis(t)
+	if pf.ActiveProfile != "Trabalho" {
+		t.Errorf("active_profile = %q, queria o primeiro perfil ativo", pf.ActiveProfile)
+	}
+	if pf.EffectiveMode() != proxy.ModeAuto {
+		t.Errorf("mode = %s, queria auto para o primeiro perfil", pf.EffectiveMode())
 	}
 }
 

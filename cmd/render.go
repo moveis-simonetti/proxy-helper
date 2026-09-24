@@ -40,7 +40,7 @@ func renderNotice(w io.Writer, n app.Notice) {
 	case app.NoticeUnreachablePassword:
 		fmt.Fprintf(w, "  warning: this profile's password comes from %s, which only the local proxy reads.\n", n.Args["source"])
 		fmt.Fprintln(w, "           The targets below get a username with no password, so they will fail to authenticate.")
-		fmt.Fprintln(w, "           Use --via-local to keep the credential in one place (see \"proxy serve\").")
+		fmt.Fprintln(w, "           Drop --no-via-local to keep the credential in one place (see \"proxy serve\").")
 	case app.NoticeDockerLoopback:
 		fmt.Fprintf(w, "  note: %s will point at 127.0.0.1, which containers cannot reach.\n", n.Target)
 		fmt.Fprintln(w, "        Pulls will work, but build steps that need the network will fail.")
@@ -51,6 +51,15 @@ func renderNotice(w io.Writer, n app.Notice) {
 		} else {
 			fmt.Fprintln(w, "  note: run \"sudo systemctl restart docker\" to apply")
 		}
+	case app.NoticeDaemonStranded:
+		fmt.Fprintf(w, "  WARNING: every target points at 127.0.0.1:%s, but nothing is listening there.\n", n.Args["port"])
+		fmt.Fprintln(w, "           Until the daemon is back, this machine has no network access at all.")
+		fmt.Fprintln(w, "           Restart it:  systemctl --user restart proxy-helper.service")
+		fmt.Fprintln(w, "           Or take the targets off it:  proxy-helper proxy unset --targets all")
+	case app.NoticeDaemonOutdated:
+		fmt.Fprintln(w, "  WARNING: the running daemon is an older build than the one installed.")
+		fmt.Fprintln(w, "           It ignores the routing mode, so switching it has no effect at all.")
+		fmt.Fprintln(w, "           Restart it:  systemctl --user restart proxy-helper.service")
 	case app.NoticeNeedsSudo:
 		fmt.Fprintf(w, "  note: %s needs sudo, you may be prompted for your password\n", n.Target)
 	case app.NoticeProfileAlreadyPlumbed:

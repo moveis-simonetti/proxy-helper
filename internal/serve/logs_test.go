@@ -206,3 +206,25 @@ func TestEffectiveSinceIsEmptyWithNothingSet(t *testing.T) {
 		t.Errorf("EffectiveSince = %q, want empty", got)
 	}
 }
+
+// journalctl rejects a bare span ("Failed to parse timestamp: 10m") even
+// though it is the natural way to type one, and our own --since help text
+// uses "10m" as the example — so the CLI has to add the "-" itself.
+func TestNormalizeSincePrefixesABareDuration(t *testing.T) {
+	for _, s := range []string{"10m", "1h", "1h30m", "2 days", "45s", " 5m "} {
+		if got := NormalizeSince(s); got != "-"+strings.TrimSpace(s) {
+			t.Errorf("NormalizeSince(%q) = %q, want %q", s, got, "-"+strings.TrimSpace(s))
+		}
+	}
+}
+
+func TestNormalizeSinceLeavesEverythingElseAlone(t *testing.T) {
+	for _, s := range []string{
+		"", "-10m", "+10m", "@1700000000", "today", "yesterday", "now",
+		"2026-08-21 14:00", "2026-08-25T16:00:00Z",
+	} {
+		if got := NormalizeSince(s); got != s {
+			t.Errorf("NormalizeSince(%q) = %q, want unchanged", s, got)
+		}
+	}
+}

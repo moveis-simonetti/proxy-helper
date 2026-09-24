@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+// Off/On used to move the name between ActiveProfile and LastProfile.
+// Routing now lives in Mode, so the selection survives the round trip
+// untouched — see TestOffKeepsProfileSelected in mode_test.go for why that
+// matters. LastProfile is still mirrored for a pre-Mode daemon.
 func TestOffRemembersAndOnRestores(t *testing.T) {
 	pf := &ProfileFile{
 		ActiveProfile: "work",
@@ -16,8 +20,11 @@ func TestOffRemembersAndOnRestores(t *testing.T) {
 	}
 
 	pf.Off()
-	if pf.ActiveProfile != "" {
-		t.Errorf("ActiveProfile = %q, want empty after Off", pf.ActiveProfile)
+	if pf.ActiveProfile != "work" {
+		t.Errorf("ActiveProfile = %q, want it still selected after Off", pf.ActiveProfile)
+	}
+	if pf.EffectiveMode() != ModeDirect {
+		t.Errorf("mode = %q, want %q after Off", pf.EffectiveMode(), ModeDirect)
 	}
 	if pf.LastProfile != "work" {
 		t.Errorf("LastProfile = %q, want work", pf.LastProfile)
@@ -28,6 +35,9 @@ func TestOffRemembersAndOnRestores(t *testing.T) {
 	}
 	if pf.ActiveProfile != "work" {
 		t.Errorf("ActiveProfile = %q, want work after On", pf.ActiveProfile)
+	}
+	if pf.EffectiveMode() == ModeDirect {
+		t.Error("mode is still direct after On")
 	}
 }
 
@@ -53,6 +63,9 @@ func TestOffTwiceKeepsFirstLastProfile(t *testing.T) {
 	}
 	pf.Off()
 	pf.Off() // already off; must not clobber LastProfile with ""
+	if pf.ActiveProfile != "work" {
+		t.Errorf("ActiveProfile = %q, want it still selected", pf.ActiveProfile)
+	}
 	if pf.LastProfile != "work" {
 		t.Errorf("LastProfile = %q, want work", pf.LastProfile)
 	}

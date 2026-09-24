@@ -23,9 +23,20 @@ const DefaultLocalPort = 8888
 
 // ProfileFile is the on-disk format for saved proxy profiles.
 type ProfileFile struct {
+	// Mode is what the daemon does with a request: "auto", "upstream" or
+	// "direct" (see mode.go). It is a string rather than a Mode so an
+	// unrecognised value round-trips into Normalize instead of failing the
+	// whole unmarshal. Read it through EffectiveMode, never directly.
+	Mode string `json:"mode,omitempty"`
+	// ActiveProfile is which profile is *selected*. Whether it is used is
+	// Mode's business — before that field existed this one answered both
+	// questions, which is what forced LastProfile.
 	ActiveProfile string   `json:"active_profile,omitempty"`
 	GlobalNoProxy []string `json:"global_no_proxy,omitempty"`
-	// LastProfile is what "proxy on" restores after "proxy off".
+	// LastProfile mirrors ActiveProfile. It is written but no longer read:
+	// a daemon built before Mode existed and still running after an upgrade
+	// falls back to it, so dropping it would strand that process routing
+	// direct. Normalize is what reads it, once, to migrate an old config.
 	LastProfile string `json:"last_profile,omitempty"`
 	// DockerBridge records that the daemon also listens on the Docker bridge,
 	// which is what lets build containers reach it. Off by default: it exposes
@@ -45,6 +56,12 @@ type ProfileFile struct {
 	// duplicate locking, atomic-write and path-resolution logic for one
 	// boolean. The CLI never reads or writes this field.
 	CloseToTray bool `json:"close_to_tray,omitempty"`
+	// LogsLive records the GUI-only preference that the Daemon page's logs
+	// table refreshes itself on a timer ("Ao vivo"). Off by default — the
+	// zero value and an absent field mean the same thing, which is what
+	// lets omitempty stand. The CLI never reads or writes this field; see
+	// CloseToTray for why GUI preferences live in this file at all.
+	LogsLive bool `json:"logs_live,omitempty"`
 	// LogsSince is the cut-off "proxy logs" and the GUI's Daemon page read
 	// from, as an RFC3339 timestamp. It is what "clearing the logs" means
 	// here, and the name is deliberate: nothing is deleted.
@@ -98,7 +115,9 @@ func LoadProfiles() (*ProfileFile, error) {
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return &ProfileFile{Profiles: map[string]Config{}}, nil
+		fresh := &ProfileFile{Profiles: map[string]Config{}}
+		fresh.Normalize()
+		return fresh, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
@@ -111,6 +130,9 @@ func LoadProfiles() (*ProfileFile, error) {
 	if pf.Profiles == nil {
 		pf.Profiles = map[string]Config{}
 	}
+	// Every read goes through the migration, so no caller has to know
+	// whether the file on disk predates the mode field.
+	pf.Normalize()
 	return &pf, nil
 }
 
@@ -120,38 +142,49 @@ func (pf *ProfileFile) Get(name string) (Config, bool) {
 	return cfg, ok
 }
 
-// Off clears the active profile, which makes the daemon route everything
-// direct. It remembers what was active so On can restore it. Calling Off
-// when already off keeps the remembered profile.
+// Off routes everything direct. It is a thin alias over SetMode(ModeDirect),
+// kept because "proxy off", the tray toggle and the header switch all speak
+// this vocabulary.
+//
+// Unlike the version this replaced, it leaves ActiveProfile alone: the
+// profile stays selected while traffic goes direct, so the selector keeps
+// showing it and On has nothing to guess.
 func (pf *ProfileFile) Off() {
 	if pf.ActiveProfile != "" {
+		// Still mirrored for a pre-Mode daemon that may still be running.
 		pf.LastProfile = pf.ActiveProfile
 	}
-	pf.ActiveProfile = ""
+	pf.Mode = string(ModeDirect)
 }
 
-// On activates name, or the last profile that was active when name is empty.
+// On resumes forwarding through name, or through whatever is already
+// selected when name is empty.
 func (pf *ProfileFile) On(name string) error {
+	if name == "" {
+		name = pf.ActiveProfile
+	}
 	if name == "" {
 		name = pf.LastProfile
 	}
 	if name == "" {
-		return fmt.Errorf("no previously active profile to restore; run \"proxy on <profile>\" (see \"proxy profile list\")")
+		return fmt.Errorf("no profile to activate; run \"proxy on <profile>\" (see \"proxy profile list\")")
 	}
-	if _, ok := pf.Profiles[name]; !ok {
-		return fmt.Errorf("profile %q not found (see \"proxy profile list\")", name)
-	}
-	pf.ActiveProfile = name
-	return nil
+	return pf.SelectProfile(name)
 }
 
-// SetCurrent stores an ad-hoc config in the reserved profile and activates it.
+// SetCurrent stores an ad-hoc config in the reserved profile and selects it.
+//
+// It sets the mode too: without that, "proxy set --via-local" would leave
+// the config it just wrote selected but switched off, and the user would see
+// their apply succeed and nothing change.
 func (pf *ProfileFile) SetCurrent(cfg Config) {
 	if pf.Profiles == nil {
 		pf.Profiles = map[string]Config{}
 	}
 	pf.Profiles[CurrentProfileName] = cfg
 	pf.ActiveProfile = CurrentProfileName
+	pf.LastProfile = CurrentProfileName
+	pf.Mode = string(ModeAuto)
 }
 
 // Save writes the profiles config file, creating its parent directory if

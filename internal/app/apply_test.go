@@ -16,12 +16,16 @@ type fakeTarget struct {
 	root          bool
 	sessionScoped bool
 	available     bool
-	setCfgs       []proxy.Config
-	unsets        int
-	setErr        error
-	unsetErr      error
-	statusErr     error
-	statusCalls   int
+	// enabled is returned as Status.Enabled — e.g. a target backed by a
+	// file on disk that a previous Set already wrote, exercised by
+	// TestEnableCleansUpAStaleTargetOnAnUnconfiguredProfile.
+	enabled     bool
+	setCfgs     []proxy.Config
+	unsets      int
+	setErr      error
+	unsetErr    error
+	statusErr   error
+	statusCalls int
 	// statusDetail, when set, is returned as Status.Detail — mirroring the
 	// reason a real target like kde/lxd/snap gives for being unavailable.
 	statusDetail string
@@ -65,7 +69,7 @@ func (f *fakeTarget) Status(ex *proxy.Executor, elevate bool) (proxy.Status, err
 	if f.statusErr != nil {
 		return proxy.Status{}, f.statusErr
 	}
-	return proxy.Status{Name: f.name, Available: f.available, Detail: f.statusDetail}, nil
+	return proxy.Status{Name: f.name, Available: f.available, Enabled: f.enabled, Detail: f.statusDetail}, nil
 }
 
 func depsFor(targets ...*fakeTarget) Deps {
@@ -581,5 +585,81 @@ func TestClearViaLocalKeepsTheFlagOnAPartialRewrite(t *testing.T) {
 	}
 	if !pf.ViaLocal {
 		t.Error("via_local foi limpo com uma seleção parcial — os demais alvos continuam encanados")
+	}
+}
+
+// ApplyUserTargets is what the daemon calls on its own startup: it must
+// reach every target that never needs root, and skip every one that does —
+// those are the .deb postinst's job, not something an unprivileged process
+// should attempt silently.
+func TestApplyUserTargetsSkipsPrivilegedTargets(t *testing.T) {
+	safe := &fakeTarget{name: "git", available: true}
+	privileged := &fakeTarget{name: "apt", available: true, root: true}
+	d := depsFor(safe, privileged)
+
+	pf := &proxy.ProfileFile{LocalPort: 9999}
+	rep, err := ApplyUserTargets(d, &proxy.Executor{}, pf)
+	if err != nil {
+		t.Fatalf("ApplyUserTargets: %v", err)
+	}
+
+	if len(safe.setCfgs) != 1 {
+		t.Errorf("safe target Set called %d times, want 1", len(safe.setCfgs))
+	}
+	if len(privileged.setCfgs) != 0 {
+		t.Errorf("privileged target Set called %d times, want 0", len(privileged.setCfgs))
+	}
+	got := safe.setCfgs[0]
+	if got.Host != "127.0.0.1" || got.Port != "9999" {
+		t.Errorf("target config = %+v, want the local daemon on port 9999", got)
+	}
+	// No credentials: the daemon holds the upstream, targets never see it.
+	if got.Username != "" || got.Password != "" {
+		t.Errorf("credentials leaked into the target: %+v", got)
+	}
+	if len(rep.Results) != 2 {
+		t.Errorf("Report has %d results, want 2 (one per target, including the skipped one)", len(rep.Results))
+	}
+}
+
+func TestApplyUserTargetsUsesDockerBridge(t *testing.T) {
+	dockerConfig := &fakeTarget{name: "docker-config", available: true}
+	other := &fakeTarget{name: "git", available: true}
+	d := depsFor(dockerConfig, other)
+
+	pf := &proxy.ProfileFile{LocalPort: 9999, DockerBridge: true}
+	if _, err := ApplyUserTargets(d, &proxy.Executor{}, pf); err != nil {
+		t.Fatalf("ApplyUserTargets: %v", err)
+	}
+
+	if len(dockerConfig.setCfgs) != 1 {
+		t.Fatalf("docker-config Set called %d times, want 1", len(dockerConfig.setCfgs))
+	}
+	got := dockerConfig.setCfgs[0]
+	if got.Host != "172.17.0.1" || got.Port != "9999" {
+		t.Errorf("docker-config target config = %+v, want the bridge address on port 9999", got)
+	}
+
+	if len(other.setCfgs) != 1 {
+		t.Fatalf("git Set called %d times, want 1", len(other.setCfgs))
+	}
+	gotOther := other.setCfgs[0]
+	if gotOther.Host != "127.0.0.1" || gotOther.Port != "9999" {
+		t.Errorf("git target config = %+v, want loopback on port 9999", gotOther)
+	}
+}
+
+func TestApplyUserTargetsUsesGlobalNoProxy(t *testing.T) {
+	safe := &fakeTarget{name: "git", available: true}
+	d := depsFor(safe)
+	pf := &proxy.ProfileFile{LocalPort: 8888, GlobalNoProxy: []string{"localhost", "10.0.0.0/8"}}
+
+	if _, err := ApplyUserTargets(d, &proxy.Executor{}, pf); err != nil {
+		t.Fatalf("ApplyUserTargets: %v", err)
+	}
+	got := safe.setCfgs[0].NoProxy
+	want := []string{"localhost", "10.0.0.0/8"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("NoProxy = %v, want %v", got, want)
 	}
 }

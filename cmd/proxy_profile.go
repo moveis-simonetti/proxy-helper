@@ -18,18 +18,19 @@ var proxyProfileCmd = &cobra.Command{
 }
 
 // refuseReserved blocks the reserved "_current" slot from being managed like
-// a user profile. It belongs to "proxy set --via-local", which rewrites it
-// wholesale, so editing or deleting it by hand only creates confusion.
+// a user profile. It belongs to ad-hoc "proxy set --host ..." runs, which
+// rewrite it wholesale, so editing or deleting it by hand only creates
+// confusion.
 func refuseReserved(name, verb string) error {
 	if name != proxy.CurrentProfileName {
 		return nil
 	}
-	return fmt.Errorf("%q is reserved for \"proxy set --via-local\" and cannot be %s; save a named profile instead", name, verb)
+	return fmt.Errorf("%q is reserved for ad-hoc \"proxy set --host ...\" runs and cannot be %s; save a named profile instead", name, verb)
 }
 
 // visibleProfileNames returns the profiles a user should see, sorted. The
-// reserved slot is an implementation detail of "proxy set --via-local", not
-// something the user saved, so it stays out of the listing.
+// reserved slot is an implementation detail of ad-hoc "proxy set --host ..."
+// runs, not something the user saved, so it stays out of the listing.
 func visibleProfileNames(pf *proxy.ProfileFile) []string {
 	names := make([]string, 0, len(pf.Profiles))
 	for name := range pf.Profiles {
@@ -45,12 +46,14 @@ func visibleProfileNames(pf *proxy.ProfileFile) []string {
 // --- add ---
 
 var (
-	profileAddScheme  string
-	profileAddHost    string
-	profileAddPort    string
-	profileAddUser    string
-	profileAddPass    string
-	profileAddNoProxy []string
+	profileAddScheme            string
+	profileAddHost              string
+	profileAddPort              string
+	profileAddUser              string
+	profileAddPass              string
+	profileAddNoProxy           []string
+	profileAddConnCheckURL      string
+	profileAddConnCheckResponse string
 )
 
 var proxyProfileAddCmd = &cobra.Command{
@@ -71,12 +74,14 @@ var proxyProfileAddCmd = &cobra.Command{
 				return fmt.Errorf("profile %q already exists (use \"proxy profile edit\" to change it)", name)
 			}
 			pf.Profiles[name] = proxy.Config{
-				Scheme:   profileAddScheme,
-				Host:     profileAddHost,
-				Port:     profileAddPort,
-				Username: profileAddUser,
-				Password: profileAddPass,
-				NoProxy:  profileAddNoProxy,
+				Scheme:                    profileAddScheme,
+				Host:                      profileAddHost,
+				Port:                      profileAddPort,
+				Username:                  profileAddUser,
+				Password:                  profileAddPass,
+				NoProxy:                   profileAddNoProxy,
+				ConnectivityCheckURL:      profileAddConnCheckURL,
+				ConnectivityCheckResponse: profileAddConnCheckResponse,
 			}
 			return nil
 		})
@@ -91,12 +96,14 @@ var proxyProfileAddCmd = &cobra.Command{
 // --- edit ---
 
 var (
-	profileEditScheme  string
-	profileEditHost    string
-	profileEditPort    string
-	profileEditUser    string
-	profileEditPass    string
-	profileEditNoProxy []string
+	profileEditScheme            string
+	profileEditHost              string
+	profileEditPort              string
+	profileEditUser              string
+	profileEditPass              string
+	profileEditNoProxy           []string
+	profileEditConnCheckURL      string
+	profileEditConnCheckResponse string
 )
 
 var proxyProfileEditCmd = &cobra.Command{
@@ -136,6 +143,12 @@ var proxyProfileEditCmd = &cobra.Command{
 			if cmd.Flags().Changed("no-proxy") {
 				cfg.NoProxy = profileEditNoProxy
 			}
+			if cmd.Flags().Changed("connectivity-check-url") {
+				cfg.ConnectivityCheckURL = profileEditConnCheckURL
+			}
+			if cmd.Flags().Changed("connectivity-check-response") {
+				cfg.ConnectivityCheckResponse = profileEditConnCheckResponse
+			}
 
 			return name, cfg, nil
 		})
@@ -172,6 +185,9 @@ var proxyProfileRemoveCmd = &cobra.Command{
 			wasActive = pf.ActiveProfile == name
 			if wasActive {
 				pf.ActiveProfile = ""
+				// A forwarding mode with nothing selected is a state the
+				// daemon cannot honour; drop to direct along with it.
+				pf.Mode = string(proxy.ModeDirect)
 			}
 			if pf.LastProfile == name {
 				pf.LastProfile = ""
@@ -222,9 +238,9 @@ var proxyProfileListCmd = &cobra.Command{
 // --- enable ---
 
 var (
-	profileEnableTargets  []string
-	profileEnableDryRun   bool
-	profileEnableViaLocal bool
+	profileEnableTargets    []string
+	profileEnableDryRun     bool
+	profileEnableNoViaLocal bool
 )
 
 var proxyProfileEnableCmd = &cobra.Command{
@@ -232,8 +248,24 @@ var proxyProfileEnableCmd = &cobra.Command{
 	Short: "Apply a saved profile's proxy settings and mark it active",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		viaLocal := !profileEnableNoViaLocal
+		if viaLocal {
+			// Only force Route 1 (rewrite every target, sudo included) when
+			// the plumbing is not already up. Once it is, forcing Route 1 on
+			// every plain "profile enable" would turn the daily, sudo-free
+			// profile switch into a full privileged rewrite — Route 2 exists
+			// precisely to avoid that. See app.Enable's doc comment: passing
+			// viaLocal=true always takes Route 1; viaLocal=false lets
+			// pf.ViaLocal itself pick between Route 2 (already plumbed) and
+			// Route 3 (the --no-via-local escape hatch, untouched here).
+			pf, err := proxy.LoadProfiles()
+			if err != nil {
+				return err
+			}
+			viaLocal = !pf.ViaLocal
+		}
 		ex := &proxy.Executor{DryRun: profileEnableDryRun}
-		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, profileEnableViaLocal)
+		res, err := app.Enable(deps(), ex, args[0], profileEnableTargets, viaLocal)
 		if err != nil {
 			return err
 		}
@@ -270,12 +302,20 @@ var proxyProfileDisableCmd = &cobra.Command{
 			name = args[0]
 		}
 		ex := &proxy.Executor{DryRun: profileDisableDryRun}
-		rep, err := app.Disable(deps(), ex, name, profileDisableTargets)
+		res, err := app.Disable(deps(), ex, name, profileDisableTargets)
 		if err != nil {
 			return err
 		}
-		renderReport(stdout(), rep)
-		return rep.Err()
+		if res.Report != nil {
+			renderReport(stdout(), res.Report)
+		}
+		if res.TargetsUntouched {
+			// Mirrors the enable side: nothing was written, so a result
+			// table would be an empty header. Say what happened instead.
+			fmt.Println("routing direct; no target was touched")
+			return nil
+		}
+		return res.Report.Err()
 	},
 }
 
@@ -286,6 +326,8 @@ func init() {
 	proxyProfileAddCmd.Flags().StringVar(&profileAddUser, "user", "", "proxy username")
 	proxyProfileAddCmd.Flags().StringVar(&profileAddPass, "pass", "", "proxy password")
 	proxyProfileAddCmd.Flags().StringSliceVar(&profileAddNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
+	proxyProfileAddCmd.Flags().StringVar(&profileAddConnCheckURL, "connectivity-check-url", "", "point NetworkManager's own connectivity check at a URL this network answers without a proxy (see \"nm-connectivity\" target); leave unset to not touch it")
+	proxyProfileAddCmd.Flags().StringVar(&profileAddConnCheckResponse, "connectivity-check-response", "", "text the connectivity check URL's response body must start with (required for --connectivity-check-url to actually detect success)")
 
 	proxyProfileEditCmd.Flags().StringVar(&profileEditScheme, "scheme", "", "proxy scheme: http, https, socks5")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditHost, "host", "", "proxy host")
@@ -293,12 +335,14 @@ func init() {
 	proxyProfileEditCmd.Flags().StringVar(&profileEditUser, "user", "", "proxy username")
 	proxyProfileEditCmd.Flags().StringVar(&profileEditPass, "pass", "", "proxy password")
 	proxyProfileEditCmd.Flags().StringSliceVar(&profileEditNoProxy, "no-proxy", nil, "comma-separated hosts to bypass the proxy, in addition to the global list (see \"proxy config\")")
+	proxyProfileEditCmd.Flags().StringVar(&profileEditConnCheckURL, "connectivity-check-url", "", "point NetworkManager's own connectivity check at a URL this network answers without a proxy; empty clears it")
+	proxyProfileEditCmd.Flags().StringVar(&profileEditConnCheckResponse, "connectivity-check-response", "", "text the connectivity check URL's response body must start with")
 
-	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyProfileEnableCmd.Flags().StringSliceVar(&profileEnableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableDryRun, "dry-run", false, "print what would change without applying it")
-	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableViaLocal, "via-local", false, "point targets at the local proxy (see \"proxy serve\") instead of writing the upstream and its credentials into every tool's config")
+	proxyProfileEnableCmd.Flags().BoolVar(&profileEnableNoViaLocal, "no-via-local", false, "write the upstream and its credentials straight into every tool's config, instead of pointing them at the local proxy (see \"proxy serve\")")
 
-	proxyProfileDisableCmd.Flags().StringSliceVar(&profileDisableTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyProfileDisableCmd.Flags().StringSliceVar(&profileDisableTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxyProfileDisableCmd.Flags().BoolVar(&profileDisableDryRun, "dry-run", false, "print what would change without applying it")
 
 	proxyProfileCmd.AddCommand(proxyProfileAddCmd, proxyProfileEditCmd, proxyProfileRemoveCmd, proxyProfileListCmd, proxyProfileEnableCmd, proxyProfileDisableCmd)

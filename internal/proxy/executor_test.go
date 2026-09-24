@@ -29,6 +29,45 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// fakeEscalationPassthrough drops an executable named "sudo" on PATH that
+// really runs whatever it is given (as the current user, not root) instead
+// of prompting or failing — letting a test exercise the real mkdir/tee/
+// chmod sequence WritePrivilegedFile's escalated path runs, and inspect
+// what actually landed on disk, without a real privileged prompt.
+func fakeEscalationPassthrough(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nexec \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// Regression test: WritePrivilegedFile's escalated (sudo tee) path used to
+// ignore perm entirely, since tee itself has no notion of file mode and
+// just takes the umask's default (typically 0644). Every caller before
+// nm-connectivity's dispatcher script happened to want exactly 0644, which
+// is what let this go unnoticed — a script that must be executable is what
+// finally surfaced it.
+func TestWritePrivilegedFileAppliesPermThroughEscalation(t *testing.T) {
+	fakeEscalationPassthrough(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sub", "script")
+
+	ex := &Executor{}
+	if err := ex.WritePrivilegedFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("WritePrivilegedFile: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Errorf("perm = %o, want 0755 — the escalated tee path must apply perm via chmod", got)
+	}
+}
+
 func TestDryRunWritesToOut(t *testing.T) {
 	var buf bytes.Buffer
 	ex := &Executor{DryRun: true, Out: &buf}

@@ -85,6 +85,14 @@ type profilesPage struct {
 	passEntry    *gtk.Entry
 	noProxyEntry *gtk.Entry
 
+	// connCheckURLEntry/connCheckResponseEntry configure nm-connectivity
+	// (see internal/proxy/nmconnectivity.go): pointing NetworkManager's own
+	// connectivity check at something this profile's network answers
+	// without a proxy. Both blank (the default) leaves NetworkManager's
+	// check alone.
+	connCheckURLEntry      *gtk.Entry
+	connCheckResponseEntry *gtk.Entry
+
 	// newBtn is the list pane's "+ Novo perfil" button now, not a control in
 	// the form's own action bar — it moved so creating a profile has an
 	// entry point next to the list it will add a row to.
@@ -353,6 +361,30 @@ func setupProfilesPage(win *window, r *runner) (*profilesPage, error) {
 	}
 	sectionLabels = append(sectionLabels, noProxyLbl)
 
+	connCheckURLEntry, err := gtk.EntryNew()
+	if err != nil {
+		return nil, err
+	}
+	connCheckURLEntry.SetTooltipText("Opcional. Aponta a checagem de conectividade do NetworkManager para algo que esta rede responda sem proxy — corrige o ícone de \"conectividade limitada\" numa rede proxy-only. Deixe em branco para não mexer nisso.")
+	pp.connCheckURLEntry = connCheckURLEntry
+	connCheckURLLbl, err := addGridRow(exceptionsGrid, 1, "URL de checagem de conectividade", connCheckURLEntry)
+	if err != nil {
+		return nil, err
+	}
+	sectionLabels = append(sectionLabels, connCheckURLLbl)
+
+	connCheckResponseEntry, err := gtk.EntryNew()
+	if err != nil {
+		return nil, err
+	}
+	connCheckResponseEntry.SetTooltipText("Texto que o início da resposta da URL acima precisa ter para contar como sucesso (é assim que o NetworkManager decide). Obrigatório se a URL estiver preenchida.")
+	pp.connCheckResponseEntry = connCheckResponseEntry
+	connCheckResponseLbl, err := addGridRow(exceptionsGrid, 2, "Resposta esperada", connCheckResponseEntry)
+	if err != nil {
+		return nil, err
+	}
+	sectionLabels = append(sectionLabels, connCheckResponseLbl)
+
 	// Every field feeds refreshActionState, which recomputes canSave against
 	// pp.baseline. fillForm's SetText calls below fire "changed" too — see
 	// its own comment for why baseline must always be set after the fields,
@@ -365,6 +397,8 @@ func setupProfilesPage(win *window, r *runner) (*profilesPage, error) {
 	userEntry.Connect("changed", func() { pp.refreshActionState() })
 	passEntry.Connect("changed", func() { pp.refreshActionState() })
 	noProxyEntry.Connect("changed", func() { pp.refreshActionState() })
+	connCheckURLEntry.Connect("changed", func() { pp.refreshActionState() })
+	connCheckResponseEntry.Connect("changed", func() { pp.refreshActionState() })
 
 	labelGroup, err := gtk.SizeGroupNew(gtk.SIZE_GROUP_HORIZONTAL)
 	if err != nil {
@@ -693,6 +727,8 @@ func (pp *profilesPage) startNew() {
 	pp.userEntry.SetText("")
 	pp.passEntry.SetText("")
 	pp.noProxyEntry.SetText("")
+	pp.connCheckURLEntry.SetText("")
+	pp.connCheckResponseEntry.SetText("")
 	pp.selectedIndex = -1
 	// UnselectAll fires "row-selected" with a nil row, which onRowSelected
 	// already returns on immediately — no restoringSelection guard needed
@@ -741,13 +777,15 @@ func (pp *profilesPage) cancel() {
 // only (it reads widgets directly, no I/O).
 func (pp *profilesPage) readForm() profileFormValues {
 	return profileFormValues{
-		Name:    strings.TrimSpace(entryText(pp.nameEntry)),
-		Scheme:  pp.schemeCombo.GetActiveText(),
-		Host:    strings.TrimSpace(entryText(pp.hostEntry)),
-		Port:    strings.TrimSpace(entryText(pp.portEntry)),
-		User:    entryText(pp.userEntry),
-		Pass:    entryText(pp.passEntry),
-		NoProxy: entryText(pp.noProxyEntry),
+		Name:              strings.TrimSpace(entryText(pp.nameEntry)),
+		Scheme:            pp.schemeCombo.GetActiveText(),
+		Host:              strings.TrimSpace(entryText(pp.hostEntry)),
+		Port:              strings.TrimSpace(entryText(pp.portEntry)),
+		User:              entryText(pp.userEntry),
+		Pass:              entryText(pp.passEntry),
+		NoProxy:           entryText(pp.noProxyEntry),
+		ConnCheckURL:      strings.TrimSpace(entryText(pp.connCheckURLEntry)),
+		ConnCheckResponse: entryText(pp.connCheckResponseEntry),
 	}
 }
 
@@ -870,6 +908,8 @@ func (pp *profilesPage) fillForm(name string, cfg proxy.Config) {
 	pp.userEntry.SetText(cfg.Username)
 	pp.passEntry.SetText(cfg.Password)
 	pp.noProxyEntry.SetText(strings.Join(cfg.NoProxy, ", "))
+	pp.connCheckURLEntry.SetText(cfg.ConnectivityCheckURL)
+	pp.connCheckResponseEntry.SetText(cfg.ConnectivityCheckResponse)
 	pp.removeBtn.SetVisible(true)
 	pp.removeBtn.SetSensitive(true)
 	pp.resultLbl.SetText("")
@@ -1001,6 +1041,9 @@ func (pp *profilesPage) doRemove(name string) {
 			wasActive = pf.ActiveProfile == name
 			if wasActive {
 				pf.ActiveProfile = ""
+				// See cmd/proxy_profile.go: a forwarding mode with nothing
+				// selected is not a state the daemon can honour.
+				pf.Mode = string(proxy.ModeDirect)
 			}
 			if pf.LastProfile == name {
 				pf.LastProfile = ""

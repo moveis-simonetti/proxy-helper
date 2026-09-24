@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
+	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
 	"proxy-helper/internal/serve"
 
+	"github.com/gotk3/gotk3/gdk"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -30,13 +33,6 @@ const (
 	// of surfacing a scary message. See load()'s doc comment.
 	daemonBridgeUnavailableTooltip = "bridge do Docker não está disponível nesta máquina"
 )
-
-// logsBlockLines is how many journal lines the logs block reads, the same
-// default `proxy logs --lines` uses. It is deliberately not exposed as a
-// control — the task brief's UI-to-command mapping table has no field for
-// it, and --since/--lines/--follow/--json are explicitly out of scope for
-// this first version.
-const logsBlockLines = 200
 
 // daemonPage owns the Daemon page's "Serviço" block: the read-only state
 // labels, the port and Docker bridge controls, and install/apply/remove/
@@ -58,11 +54,50 @@ type daemonPage struct {
 
 	bridgeSwitch  *gtk.Switch
 	bridgeWarnLbl *gtk.Label
+	// pendingLbl sits under the bridge warning and says, in words, that the
+	// form holds changes the system has not been told about. Before it, the
+	// only sign was primaryBtn turning sensitive — which a user missed,
+	// closing the window with the bridge switch on and the daemon still
+	// bound to loopback alone. See daemonPendingNotice.
+	pendingLbl *gtk.Label
 
 	reloadBtn  *gtk.Button
 	removeBtn  *gtk.Button
 	primaryBtn *gtk.Button
 	resultLbl  *gtk.Label
+
+	// strandedBar/strandedLbl are page_status.go's newStrandedBar pattern,
+	// reused here: this is the new (and only) place "Remover serviço" lives,
+	// as a recovery action inside the one warning that means something is
+	// actually wrong — not a button sitting in the normal flow with nothing
+	// to protect against. See setStrandedVisible.
+	strandedBar *gtk.InfoBar
+	strandedLbl *gtk.Label
+
+	// notInstalledLbl replaces the whole button row when load() finds no
+	// unit on disk: installing the daemon from the GUI is no longer a
+	// supported path (the .deb does it, or "proxy serve install" from a
+	// terminal for a source build) — there is nothing left to click here.
+	notInstalledLbl *gtk.Label
+
+	// staleTargetsBtn appears only after a port change left the targets on
+	// the old port. It navigates to the Status page instead of applying
+	// here: applying needs the target selection, the pkexec path and the
+	// report display, all of which live on that page. Duplicating them
+	// would fork the apply logic; reaching into statusPage would couple two
+	// pages that today know nothing of each other.
+	staleTargetsBtn *gtk.Button
+	// stack is the window's page switcher, held only so the button above
+	// can bring the user to "status".
+	stack *gtk.Stack
+
+	// pendingResult survives the load() that every action fires on its way
+	// out. load() is asynchronous and its callback (applyLoad) clears
+	// resultLbl, so a message written before it lands is wiped a moment
+	// later — which is why "alterações aplicadas" only ever flickered.
+	// applyLoad shows this instead of clearing, then empties it, so the
+	// next plain reload still starts clean.
+	pendingResult string
 
 	// installed mirrors what load() last found on disk (serve.UnitPath()
 	// exists). Read by refreshActionState and daemonPrimaryActionLabel; not
@@ -126,12 +161,66 @@ type daemonPage struct {
 	// only thing that turns the pair into a decision.
 	liveWanted  bool
 	windowShown bool
+
+	// logsInFlight counts refreshes submitted but not yet delivered back.
+	// The live tick fires on wall-clock time with no idea whether the
+	// previous read finished; on a slow journal read every tick would pile
+	// one more job onto the runner's bounded queue until submitQuiet — a
+	// send on a full channel, made from the UI thread — blocked the main
+	// loop. Quiet refreshes are simply skipped while one is in flight.
+	// UI thread only.
+	logsInFlight int
+}
+
+// newDaemonStrandedBar builds the warning shown when the daemon is
+// Stranded (targets point at a port nothing answers on) or Outdated (a
+// pre-mode build is still running). Same shape as page_status.go's
+// newStrandedBar, with one addition: "Remover serviço" rides along as the
+// bar's action widget (AddActionWidget, same mechanism newElevationBar
+// uses for "Ler com sudo") — this is the only place that button exists now.
+// Hidden at construction; setStrandedVisible reveals it, and hides the
+// button specifically when the service was never installed to begin with
+// (see setStrandedVisible's doc comment).
+func newDaemonStrandedBar(onRemove func()) (*gtk.InfoBar, *gtk.Label, *gtk.Button, error) {
+	bar, err := gtk.InfoBarNew()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	bar.SetMessageType(gtk.MESSAGE_ERROR)
+	bar.SetNoShowAll(true)
+	bar.SetVisible(false)
+
+	content, err := bar.GetContentArea()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	lbl.SetXAlign(0)
+	lbl.SetLineWrap(true)
+	content.PackStart(lbl, true, true, 0)
+
+	btn, err := gtk.ButtonNewWithLabel("Remover serviço")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	btn.SetNoShowAll(true)
+	btn.SetVisible(false)
+	btn.Connect("clicked", onRemove)
+	bar.AddActionWidget(btn, gtk.RESPONSE_NONE)
+
+	return bar, lbl, btn, nil
 }
 
 // setupDaemonPage fills win.DaemonPage (built empty by newWindow) with the
 // service block described by the task brief: a formGrid of read-only rows
 // (Estado/Escutando/Perfil) plus the Porta control, the bridge switch and
-// its warning, and the install/apply/remove/reload buttons.
+// its warning, "Recarregar" and the single "Salvar" primary button (visible
+// only once the daemon is installed — notInstalledLbl replaces the row with
+// a static message otherwise), plus the Stranded/Outdated warning bar that
+// now also holds "Remover serviço".
 func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	dp := &daemonPage{runner: r, topWindow: win.Window}
 
@@ -229,11 +318,23 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 		if dp.repopulating {
 			return false
 		}
-		if state && !dp.confirmBridgeOn() {
+		if state {
+			// confirmBridgeOn used to run right here, synchronously inside
+			// this handler. A GtkSwitch fires "state-set" while its own
+			// pointer/touch grab for the drag gesture can still be active,
+			// and nesting gtk_dialog_run's own main loop inside that grab
+			// froze the whole window on some desktops (observed the hard
+			// way: GTK stuck spinning inside cgo, confirmed via a SIGQUIT
+			// goroutine dump). r.post runs it from a plain idle callback
+			// instead, after this handler and the switch's own drag
+			// handling have both fully returned — same timing revert
+			// already needed below, for the same "not during" reason.
 			dp.runner.post(func() {
-				dp.repopulating = true
-				dp.bridgeSwitch.SetActive(false)
-				dp.repopulating = false
+				if !dp.confirmBridgeOn() {
+					dp.repopulating = true
+					dp.bridgeSwitch.SetActive(false)
+					dp.repopulating = false
+				}
 				dp.refreshActionState()
 			})
 			return false
@@ -268,6 +369,19 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	win.DaemonPage.PackStart(bridgeWarnLbl, false, false, 0)
 	dp.bridgeWarnLbl = bridgeWarnLbl
 
+	pendingLbl, err := gtk.LabelNew("")
+	if err != nil {
+		return nil, err
+	}
+	pendingLbl.SetXAlign(0)
+	// Same indentation as the caption above it, but deliberately not
+	// dim-label: this one is the opposite of a caption. It appears only
+	// when something is wrong-ish and needs to compete for attention with
+	// the primary button it names.
+	pendingLbl.SetMarginStart(spaceSection)
+	win.DaemonPage.PackStart(pendingLbl, false, false, 0)
+	dp.pendingLbl = pendingLbl
+
 	buttons, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, spaceTight)
 	if err != nil {
 		return nil, err
@@ -283,36 +397,45 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	buttons.PackStart(reloadBtn, false, false, 0)
 	dp.reloadBtn = reloadBtn
 
-	removeBtn, err := gtk.ButtonNewWithLabel("Remover serviço")
+	// Salvar: the only action left in the normal flow. Installing is the
+	// .deb's job now (or "proxy serve install" for a source build — see
+	// notInstalledLbl below), and removing lives inside the Stranded/
+	// Outdated warning instead of sitting here unconditionally.
+	primaryBtn, err := gtk.ButtonNewWithLabel(daemonSaveLabel)
 	if err != nil {
 		return nil, err
 	}
-	// Hidden (not merely insensitive) until load() finds an installed unit:
-	// there is nothing to remove otherwise. SetNoShowAll(true) BEFORE
-	// SetVisible(false) — app.go's Run calls win.Window.ShowAll() once,
-	// after every page is set up, and ShowAll forces every descendant
-	// visible regardless of an earlier SetVisible(false). Already bit this
-	// project twice (page_profiles.go's removeBtn, page_status.go's
-	// "Recarregar com sudo").
-	removeBtn.SetNoShowAll(true)
-	removeBtn.SetVisible(false)
-	removeBtn.Connect("clicked", func() { dp.confirmAndRemove() })
-	buttons.PackStart(removeBtn, false, false, 0)
-	dp.removeBtn = removeBtn
-
-	// Packed end LAST, per the same convention as page_profiles.go's
-	// primaryBtn: PackEnd stacks each new call closer to the true end than
-	// the ones before it, putting this in the rightmost, primary-action
-	// position the brief's layout shows.
-	primaryBtn, err := gtk.ButtonNewWithLabel(daemonPrimaryActionLabel(false))
-	if err != nil {
-		return nil, err
-	}
+	// Same ShowAll trap as every other conditionally-hidden widget in this
+	// package (see notInstalledLbl below): SetNoShowAll BEFORE SetVisible.
+	primaryBtn.SetNoShowAll(true)
 	primaryBtn.Connect("clicked", func() { dp.applyPrimary() })
 	buttons.PackStart(primaryBtn, false, false, 0)
 	dp.primaryBtn = primaryBtn
 
 	win.DaemonPage.PackStart(buttons, false, false, 0)
+
+	notInstalledLbl, err := gtk.LabelNew("Daemon não instalado. Rode \"proxy serve install\" no terminal, ou instale o pacote \".deb\".")
+	if err != nil {
+		return nil, err
+	}
+	notInstalledLbl.SetXAlign(0)
+	notInstalledLbl.SetLineWrap(true)
+	// Same ShowAll trap as every other conditionally-hidden widget in this
+	// package (see the removeBtn comment this replaced, and
+	// page_status.go's elevationBar): SetNoShowAll BEFORE SetVisible(false).
+	notInstalledLbl.SetNoShowAll(true)
+	notInstalledLbl.SetVisible(false)
+	win.DaemonPage.PackStart(notInstalledLbl, false, false, 0)
+	dp.notInstalledLbl = notInstalledLbl
+
+	strandedBar, strandedLbl, removeBtn, err := newDaemonStrandedBar(func() { dp.confirmAndRemove() })
+	if err != nil {
+		return nil, err
+	}
+	win.DaemonPage.PackStart(strandedBar, false, false, 0)
+	dp.strandedBar = strandedBar
+	dp.strandedLbl = strandedLbl
+	dp.removeBtn = removeBtn
 
 	resultLbl, err := gtk.LabelNew("")
 	if err != nil {
@@ -322,6 +445,21 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	resultLbl.SetLineWrap(true)
 	win.DaemonPage.PackStart(resultLbl, false, false, 0)
 	dp.resultLbl = resultLbl
+
+	staleTargetsBtn, err := gtk.ButtonNewWithLabel("Reaplicar alvos")
+	if err != nil {
+		return nil, err
+	}
+	staleTargetsBtn.SetHAlign(gtk.ALIGN_START)
+	staleTargetsBtn.SetNoShowAll(true)
+	staleTargetsBtn.SetVisible(false)
+	staleTargetsBtn.Connect("clicked", func() {
+		dp.stack.SetVisibleChildName("status")
+		dp.setStaleTargetsBtnVisible(false)
+	})
+	win.DaemonPage.PackStart(staleTargetsBtn, false, false, 0)
+	dp.staleTargetsBtn = staleTargetsBtn
+	dp.stack = win.Stack
 
 	if err := dp.setupLogsBlock(win); err != nil {
 		return nil, err
@@ -343,15 +481,12 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 		dp.refreshActionState()
 	})
 
-	// Polling the journal every two seconds while the window is hidden in
-	// the tray is pure waste: nobody can see the table. "hide" fires on the
+	// Polling the journal every two seconds while nobody can see the table
+	// is pure waste. Two ways off screen, two signals: "hide" fires on the
 	// Window.Hide() that window.go's delete-event handler calls for
-	// close-to-tray, and "show" on the Present() the tray's "Abrir" does.
-	//
-	// Note this covers HIDDEN, not minimised: iconifying a window does not
-	// emit "hide", so a minimised window keeps ticking. That is the case
-	// the user actually raised, and widening it to iconification would mean
-	// window-state events with their own quirks per window manager.
+	// close-to-tray (and "show" on the Present() the tray's "Abrir" does);
+	// iconifying emits no hide/show at all, only "window-state-event" with
+	// the ICONIFIED bit flipping.
 	win.Window.Connect("hide", func() {
 		dp.windowShown = false
 		dp.syncLive()
@@ -359,12 +494,18 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	win.Window.Connect("show", func() {
 		dp.windowShown = true
 		dp.syncLive()
-		// Read once right now, not in two seconds. Every refresh is a full
-		// re-read of the journal's tail, so nothing that happened while
-		// hidden is lost — but waiting for the first tick would show a
-		// stale table at exactly the moment the user is looking at it.
-		if dp.liveStop != nil {
-			dp.refreshLogs(true)
+		dp.refreshOnReappear()
+	})
+	win.Window.Connect("window-state-event", func(_ *gtk.Window, ev *gdk.Event) {
+		e := gdk.EventWindowStateNewFromEvent(ev)
+		if e.ChangedMask()&gdk.WINDOW_STATE_ICONIFIED == 0 {
+			return
+		}
+		iconified := e.NewWindowState()&gdk.WINDOW_STATE_ICONIFIED != 0
+		dp.windowShown = !iconified
+		dp.syncLive()
+		if !iconified {
+			dp.refreshOnReappear()
 		}
 	})
 
@@ -372,11 +513,11 @@ func setupDaemonPage(win *window, r *runner) (*daemonPage, error) {
 	// Quiet: the window is still being built, and there is no click to
 	// acknowledge.
 	dp.refreshLogs(true)
-	// Explicit: the checkbox is SetActive(true) before its handler is
-	// connected, so nothing has started the ticker yet. The window has not
-	// been shown at this point either — app.go calls ShowAll after every
-	// page is set up — so assume it is about to be, and let "hide"/"show"
-	// correct it from here on.
+	// The window has not been shown at this point — app.go calls ShowAll
+	// after every page is set up — so assume it is about to be, and let
+	// "hide"/"show"/"window-state-event" correct it from here on. This
+	// syncLive is what starts the ticker for a user whose logs_live was
+	// restored as on; for everyone else it is a no-op.
 	dp.windowShown = true
 	dp.syncLive()
 
@@ -398,21 +539,30 @@ func (dp *daemonPage) readForm() daemonFormValues {
 // not apply themselves, per the task brief's decision that a click on the
 // primary button is the only thing that reinstalls the service.
 func (dp *daemonPage) refreshActionState() {
+	pending := daemonPending(dp.baseline, dp.readForm())
+
+	// The notice tracks the pending state itself, not the button's
+	// sensitivity: during a job the button goes insensitive while the
+	// changes are still unapplied, and telling the user they vanished
+	// would be worse than saying nothing.
+	dp.pendingLbl.SetText(daemonPendingNotice(pending))
+
 	if dp.busy {
 		dp.primaryBtn.SetSensitive(false)
 		return
 	}
-	if !dp.installed {
-		dp.primaryBtn.SetSensitive(true)
-		return
-	}
-	dp.primaryBtn.SetSensitive(daemonPending(dp.baseline, dp.readForm()))
+	dp.primaryBtn.SetSensitive(pending)
 }
 
 // confirmBridgeOn asks before turning the bridge switch ON — never before
 // turning it off, per the task brief. Purely a dialog, no I/O, so (like
-// page_profiles.go's confirmDiscardChanges/confirmRemove) it runs
-// synchronously on the UI thread rather than through the runner.
+// page_profiles.go's confirmDiscardChanges/confirmRemove) it runs on the UI
+// thread rather than through the runner — but always from a runner.post
+// callback (see the "state-set" handler above), never called directly
+// inside a GTK signal handler: a GtkSwitch can still hold its own
+// pointer/touch grab for the drag gesture while "state-set" fires, and
+// nesting gtk_dialog_run's own main loop inside that grab froze the window
+// solid on at least one desktop.
 func (dp *daemonPage) confirmBridgeOn() bool {
 	dlg := gtk.MessageDialogNew(dp.topWindow, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", daemonBridgeConfirm)
 	dlg.SetModal(true)
@@ -430,7 +580,9 @@ func (dp *daemonPage) confirmBridgeOn() bool {
 //
 // serve.DockerBridgeAddr's error is not treated as a failure: a machine with
 // no docker0 interface (Docker never started, or not installed) is a normal
-// environment, not a bug — see daemonBridgeUnavailableTooltip.
+// environment, not a bug — see daemonBridgeUnavailableTooltip. It still
+// decides whether the switch is usable; what the daemon *listens on* is a
+// separate question, answered by probing (see listening below).
 func (dp *daemonPage) load() {
 	dp.runner.submit(func() func() {
 		active := serve.DaemonActive()
@@ -449,28 +601,35 @@ func (dp *daemonPage) load() {
 			}
 		}
 
-		bridgeAddr, bridgeErr := serve.DockerBridgeAddr()
+		// Only the error matters now: it decides whether the switch is
+		// usable. The address itself is no longer displayed — probing
+		// reports what is bound, and ListeningAddrs does its own lookup.
+		_, bridgeErr := serve.DockerBridgeAddr()
 
-		return func() { dp.applyLoad(active, installed, pf, bridgeAddr, bridgeErr) }
+		// Observed, not derived. This runs on the runner's worker
+		// goroutine, which is why a probe with I/O in it is fine here
+		// and would not be on the UI thread.
+		listening := serve.ListeningAddrs(pf.EffectiveLocalPort())
+
+		health := app.CheckDaemon(pf, app.LiveDaemonChecks())
+
+		return func() { dp.applyLoad(active, installed, pf, bridgeErr, listening, health) }
 	})
 }
 
 // applyLoad renders a load() result onto the widgets. UI thread only, called
 // from a runner delivery.
-func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, bridgeAddr string, bridgeErr error) {
+func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, bridgeErr error, listening []string, health app.DaemonHealth) {
 	port := pf.EffectiveLocalPort()
 	bridgeOn := pf.DockerBridge
 	bridgeAvailable := bridgeErr == nil
 
-	// Listen shows the bridge address only when it is both turned on AND
-	// actually reachable — a saved preference for a machine that no longer
-	// has Docker installed should not claim an address that is not really
-	// being listened on.
-	listenBridgeAddr := ""
-	if bridgeOn && bridgeAvailable {
-		listenBridgeAddr = bridgeAddr
-	}
-	sum := summarize(active, installed, port, listenBridgeAddr, pf.ActiveProfile)
+	// Listen renders the probe's result verbatim. It used to be assembled
+	// from pf.DockerBridge plus a live interface lookup, which describes
+	// the config rather than the process: a unit installed without
+	// --docker-bridge next to docker_bridge:true showed a bridge address
+	// nothing was bound to, and the inverse hid one that was.
+	sum := summarize(active, installed, listening, pf.ActiveProfile)
 	dp.stateLbl.SetText(sum.State)
 	dp.listenLbl.SetText(sum.Listen)
 	dp.profileLbl.SetText(sum.Profile)
@@ -500,20 +659,67 @@ func (dp *daemonPage) applyLoad(active, installed bool, pf *proxy.ProfileFile, b
 	// the form to match what it just read.
 	dp.baseline = daemonFormValues{Port: port, DockerBridge: bridgeOn}
 
-	dp.primaryBtn.SetLabel(daemonPrimaryActionLabel(installed))
-	dp.removeBtn.SetVisible(installed)
+	// Installing from the GUI is not a supported path any more (see
+	// setupDaemonPage's newDaemonStrandedBar comment) — without a unit on
+	// disk there is nothing this page can do about it, so the whole normal
+	// form gives way to a static message instead of a button that would
+	// only fail.
+	dp.portSpin.SetSensitive(installed)
+	dp.bridgeSwitch.SetSensitive(installed && bridgeAvailable)
+	dp.reloadBtn.SetSensitive(installed)
+	dp.primaryBtn.SetVisible(installed)
+	dp.notInstalledLbl.SetVisible(!installed)
 
-	dp.resultLbl.SetText("")
+	dp.setStrandedVisible(installed, health)
+
+	dp.resultLbl.SetText(dp.pendingResult)
+	dp.pendingResult = ""
 	dp.refreshActionState()
 }
 
-// applyPrimary installs the service (not yet installed) or reinstalls it
-// with the pending port/bridge changes (already installed) — InstallUnit
-// itself only restarts a running unit, so this one call correctly covers
-// both "Instalar serviço" and "Aplicar alterações". Port and bridge are read
-// on the UI thread, right before submit, and captured — reading a widget
-// from the runner's worker goroutine is the bug page_status.go's apply()
-// doc comment already warns about.
+// setStrandedVisible shows or hides this page's Stranded/Outdated warning
+// — same trigger page_status.go's own bar uses (app.DaemonHealth), and the
+// only place "Remover serviço" appears now. The button itself is hidden
+// within an otherwise-visible bar when the service was never installed:
+// Outdated/Stranded both require ViaLocal (see DaemonHealth's doc
+// comment), which in practice needs config on disk, but installed is the
+// authoritative "is there a unit to remove" fact — trust it over inferring
+// the same thing from health.
+func (dp *daemonPage) setStrandedVisible(installed bool, h app.DaemonHealth) {
+	var n app.Notice
+	switch {
+	case h.Stranded():
+		n = app.Notice{
+			Kind: app.NoticeDaemonStranded,
+			Args: map[string]string{"port": fmt.Sprint(h.Port)},
+		}
+	case h.Outdated():
+		n = app.Notice{Kind: app.NoticeDaemonOutdated}
+	default:
+		dp.strandedBar.SetVisible(false)
+		return
+	}
+	dp.strandedLbl.SetText(noticeText(n))
+	dp.strandedLbl.SetVisible(true)
+	dp.removeBtn.SetVisible(installed)
+	dp.strandedBar.ShowAll()
+	dp.strandedBar.SetVisible(true)
+	if !installed {
+		// ShowAll() above would otherwise reveal it again — SetNoShowAll on
+		// the button only stops a ShowAll call on the button itself from
+		// being redundant, not one on an ancestor. See setElevationBarVisible
+		// in page_status.go for the same interaction.
+		dp.removeBtn.SetVisible(false)
+	}
+}
+
+// applyPrimary is "Salvar": primaryBtn is visible only when the daemon is
+// already installed (see applyLoad), so this always reinstalls the unit
+// with the pending port/bridge changes — InstallUnit itself only restarts a
+// running unit, which is exactly what "Salvar" needs. Port and bridge are
+// read on the UI thread, right before submit, and captured — reading a
+// widget from the runner's worker goroutine is the bug page_status.go's
+// apply() doc comment already warns about.
 func (dp *daemonPage) applyPrimary() {
 	form := dp.readForm()
 	wasInstalled := dp.installed
@@ -533,7 +739,15 @@ func (dp *daemonPage) applyPrimary() {
 		// mirrors cmd/proxy_serve.go's "install" command: --via-local and
 		// "proxy status" read LocalPort from disk, so a unit installed
 		// before the new port is saved would briefly disagree with them.
+		// Captured inside the lock, before the overwrite: the old port and
+		// bridge are what every target still points at, and they are gone
+		// the moment the new values are saved. Reading them afterwards
+		// would always report "no change".
+		var oldPort int
+		var oldBridge bool
 		if err := proxy.WithProfileLock(func(lpf *proxy.ProfileFile) error {
+			oldPort = lpf.EffectiveLocalPort()
+			oldBridge = lpf.DockerBridge
 			lpf.LocalPort = form.Port
 			lpf.DockerBridge = form.DockerBridge
 			return nil
@@ -542,32 +756,132 @@ func (dp *daemonPage) applyPrimary() {
 				dp.resultLbl.SetText(fmt.Sprintf("erro ao salvar configuração: %s", err))
 			}
 		}
+		portChanged := portChangeStrandsTargets(oldPort, form.Port)
+		bridgeChanged := oldBridge != form.DockerBridge
 
 		// EscalateNone: InstallUnit only ever runs "systemctl --user ...",
 		// which never needs root. A blocking password prompt here would
 		// freeze the window with no way out; failing explicitly instead
 		// (per the task brief) surfaces the problem instead of hanging.
 		ex := &proxy.Executor{Escalation: proxy.EscalateNone}
-		if err := serve.InstallUnit(ex, execPath, form.Port, form.DockerBridge); err != nil {
+		if err := serve.InstallUnit(ex, execPath, form.Port, form.DockerBridge, false); err != nil {
 			return func() {
 				dp.resultLbl.SetText(fmt.Sprintf("erro ao instalar serviço: %s", err))
 			}
 		}
 
-		return func() {
-			if wasInstalled {
-				dp.resultLbl.SetText("alterações aplicadas")
+		// A port or bridge change leaves every target pointing at the old
+		// value — reapplyAllTargets (outside proxy.WithProfileLock, which
+		// does not nest, and after InstallUnit, which is what "the daemon
+		// is there to receive the new plumbing" means) tries to fix that on
+		// the spot instead of making the user go do it by hand on the
+		// Status page. It only runs when there is something sensible to
+		// reapply to — targets already plumbed to the daemon, and a
+		// profile active; see its own doc comment for why.
+		var warning string
+		if portChanged || bridgeChanged {
+			if reapplyMsg, ok := reapplyAllTargets(); ok {
+				warning = reapplyMsg
 			} else {
-				dp.resultLbl.SetText("serviço instalado")
+				switch {
+				case portChanged && bridgeChanged:
+					warning = staleTargetsWarning(oldPort, form.Port) + "; " + staleBridgeWarning()
+				case portChanged:
+					warning = staleTargetsWarning(oldPort, form.Port)
+				default:
+					warning = staleBridgeWarning()
+				}
 			}
+		}
+
+		return func() {
+			// Through pendingResult, not SetText: dp.load() below would
+			// clear the label before the user could read it.
+			dp.pendingResult = daemonApplyMessage(wasInstalled, warning)
+			// The fallback button only makes sense when nothing was
+			// reapplied automatically — reapplyAllTargets succeeding (even
+			// with a warning riding along, e.g. a partial failure it
+			// already reported) means there is nothing left for a trip to
+			// the Status page to fix that this run did not already try.
+			dp.setStaleTargetsBtnVisible(warning != "" && !strings.HasPrefix(warning, "alvos reaplicados"))
 			dp.load()
 		}
 	})
 }
 
+// reapplyAllTargets re-plumbs every target at the (possibly new) port and
+// bridge address right after applyPrimary saves a port or docker_bridge
+// change — the same in-process/pkexec split the Status page's apply() uses
+// for the user's own selection, reused here over every target instead
+// (splitSessionAware and applyPrivilegedViaLocal, both in elevate.go/
+// page_status.go, take no page-specific state). Runs off the UI thread,
+// called only from inside applyPrimary's runner job.
+//
+// Returns ok=false when there is nothing sensible to reapply yet — no
+// active profile to read a config from, or the targets were never plumbed
+// to the daemon in the first place (pf.ViaLocal false, e.g. before the
+// daemon's own first-boot self-apply has run). The caller falls back to
+// the old "go apply it yourself" notice in that case.
+//
+// Unlike the Status page's apply(), this never pre-warns about a
+// dockerd-plus-bridge combination needing two separate pkexec calls — Salvar
+// is one action already in flight when this runs, not a second stage a user
+// could still back out of, so the two prompts simply appear one after the
+// other instead of being announced first.
+func reapplyAllTargets() (msg string, ok bool) {
+	profile, cfg, pf, err := activeProfile()
+	if err != nil || !pf.ViaLocal {
+		return "", false
+	}
+
+	var infos []selectedTargetInfo
+	for _, t := range proxy.AllTargets() {
+		infos = append(infos, selectedTargetInfo{
+			Name:          t.Name(),
+			Root:          t.RequiresRoot(),
+			SessionScoped: t.SessionScoped(),
+		})
+	}
+	user, privileged := splitSessionAware(infos)
+
+	var userErr error
+	if len(user) > 0 {
+		ex := &proxy.Executor{Escalation: proxy.EscalateNone, Out: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+		_, userErr = app.Apply(statusDeps(), ex, profile, cfg, user, true)
+	}
+
+	var privMsg string
+	if len(privileged) > 0 {
+		port := pf.EffectiveLocalPort()
+		mergedNoProxy := proxy.MergeNoProxy(pf.EffectiveGlobalNoProxy(), cfg.NoProxy)
+		privMsg, _ = applyPrivilegedViaLocal(port, mergedNoProxy, privileged, pf.DockerBridge)
+	}
+
+	switch {
+	case userErr != nil && privMsg != "":
+		return fmt.Sprintf("alvos reaplicados com ressalvas: %s; %s", userErr, privMsg), true
+	case userErr != nil:
+		return fmt.Sprintf("alvos reaplicados com ressalvas: %s", userErr), true
+	case privMsg != "":
+		return "alvos reaplicados — " + privMsg, true
+	default:
+		return "alvos reaplicados", true
+	}
+}
+
 // confirmAndRemove asks for confirmation, modal and transient for the main
 // window like every other destructive dialog in this package, then removes
 // the service.
+// setStaleTargetsBtnVisible shows or hides the "Reaplicar alvos" button.
+// SetNoShowAll is set on the widget, so a ShowAll() elsewhere on this page
+// cannot make it reappear on its own once hidden.
+func (dp *daemonPage) setStaleTargetsBtnVisible(visible bool) {
+	if dp.staleTargetsBtn == nil {
+		return
+	}
+	dp.staleTargetsBtn.SetVisible(visible)
+}
+
 func (dp *daemonPage) confirmAndRemove() {
 	dlg := gtk.MessageDialogNew(dp.topWindow, gtk.DIALOG_MODAL, gtk.MESSAGE_QUESTION, gtk.BUTTONS_YES_NO, "%s", daemonRemoveConfirm)
 	dlg.SetModal(true)
@@ -690,12 +1004,35 @@ func (dp *daemonPage) setupLogsBlock(win *window) error {
 	if err != nil {
 		return err
 	}
-	liveChk.SetTooltipText("Relê o journal a cada 2 segundos. Desmarque para congelar a tabela e ler com calma.")
-	liveChk.SetActive(true)
-	dp.liveWanted = true
+	liveChk.SetTooltipText("Relê o journal a cada 2 segundos enquanto marcado.")
+	// Off by default, restored from config.json's logs_live: the live tick
+	// is a cost the user opts into once, not a mode they have to re-enable
+	// every launch. Like buildUI's close_to_tray read, a read failure
+	// falls back to the safe default (off). SetActive runs BEFORE the
+	// toggled handler is connected, so restoring never re-writes the
+	// config or starts the ticker early — the setup tail's syncLive does
+	// that, after windowShown is decided.
+	logsLive := false
+	if pf, err := proxy.LoadProfiles(); err == nil {
+		logsLive = pf.LogsLive
+	}
+	liveChk.SetActive(logsLive)
+	dp.liveWanted = logsLive
 	liveChk.Connect("toggled", func() {
-		dp.liveWanted = liveChk.GetActive()
+		active := liveChk.GetActive()
+		dp.liveWanted = active
 		dp.syncLive()
+		// Persist like tray.go's close_to_tray: I/O off the GTK thread,
+		// inside a submitted job. Quiet — a checkbox toggle needs no busy
+		// signal, and flickering every button over a one-field write would
+		// be all a loud job bought.
+		dp.runner.submitQuiet(func() func() {
+			_ = proxy.WithProfileLock(func(pf *proxy.ProfileFile) error {
+				pf.LogsLive = active
+				return nil
+			})
+			return nil
+		})
 	})
 	filterBox.PackStart(liveChk, false, false, 0)
 	dp.logsLiveChk = liveChk
@@ -798,6 +1135,12 @@ func (dp *daemonPage) setupLogsBlock(win *window) error {
 // the two-second live tick must not, or every button in the window flickers
 // on a two-second cycle, on every page.
 func (dp *daemonPage) refreshLogs(quiet bool) {
+	// A tick that lands while the previous refresh is still in flight has
+	// nothing to add — the running read will deliver the same tail. A loud
+	// click still queues: the busy signal is the user's acknowledgement.
+	if quiet && dp.logsInFlight > 0 {
+		return
+	}
 	host, err := dp.logsHostEntry.GetText()
 	if err != nil {
 		host = ""
@@ -812,46 +1155,53 @@ func (dp *daemonPage) refreshLogs(quiet bool) {
 	if quiet {
 		submit = dp.runner.submitQuiet
 	}
+	dp.logsInFlight++
 	submit(func() func() {
-		// The cut-off set by Limpar (and by "proxy logs clear") lives in the
-		// config, so it is read here, off the UI thread, on every refresh —
-		// otherwise Limpar would write it and leave the table full.
-		args := []string{"--user", "-u", serve.UnitName, "-o", "json", "--no-pager"}
-		cutoff := ""
-		if pf, err := proxy.LoadProfiles(); err == nil {
-			cutoff = pf.LogsSince
+		done := dp.refreshLogsWork(opts)
+		return func() {
+			dp.logsInFlight--
+			done()
 		}
-		if since := serve.EffectiveSince("", cutoff, false); since != "" {
-			args = append(args, "--since", since)
-		} else {
-			args = append(args, "-n", fmt.Sprint(logsBlockLines))
-		}
-
-		cmd := exec.Command("journalctl", args...)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		out, err := cmd.Output()
-		if err != nil {
-			msg := stderr.String()
-			if msg == "" {
-				msg = err.Error()
-			}
-			return func() {
-				dp.logsResultLbl.SetText(fmt.Sprintf("erro ao ler o journal: %s", msg))
-			}
-		}
-
-		entries, err := serve.ParseEntries(bytes.NewReader(out))
-		if err != nil {
-			return func() {
-				dp.logsResultLbl.SetText(fmt.Sprintf("erro ao interpretar o journal: %s", err))
-			}
-		}
-
-		rows := logRows(serve.Filter(entries, opts))
-
-		return func() { dp.applyLogs(rows) }
 	})
+}
+
+// refreshLogsWork is refreshLogs' off-UI-thread half: it runs the journal
+// read and returns the closure that renders the result. Split out so the
+// submit wrapper in refreshLogs can pair every logsInFlight++ with exactly
+// one -- on delivery, whichever of the return paths below fires.
+func (dp *daemonPage) refreshLogsWork(opts serve.FilterOptions) func() {
+	// The cut-off set by Limpar (and by "proxy logs clear") lives in the
+	// config, so it is read here, off the UI thread, on every refresh —
+	// otherwise Limpar would write it and leave the table full.
+	cutoff := ""
+	if pf, err := proxy.LoadProfiles(); err == nil {
+		cutoff = pf.LogsSince
+	}
+
+	cmd := exec.Command("journalctl", logsJournalArgs(cutoff)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := stderr.String()
+		if msg == "" {
+			msg = err.Error()
+		}
+		return func() {
+			dp.logsResultLbl.SetText(fmt.Sprintf("erro ao ler o journal: %s", msg))
+		}
+	}
+
+	entries, err := serve.ParseEntries(bytes.NewReader(out))
+	if err != nil {
+		return func() {
+			dp.logsResultLbl.SetText(fmt.Sprintf("erro ao interpretar o journal: %s", err))
+		}
+	}
+
+	rows := logRows(serve.Filter(entries, opts))
+
+	return func() { dp.applyLogs(rows) }
 }
 
 // applyLogs renders a refreshLogs result onto the table. UI thread only,
@@ -920,6 +1270,18 @@ const liveInterval = 2 * time.Second
 // other by accident. UI thread only.
 func (dp *daemonPage) syncLive() {
 	dp.setLive(dp.liveWanted && dp.windowShown)
+}
+
+// refreshOnReappear reads the journal once, right now, when the window comes
+// back on screen with the live ticker armed — not in two seconds. Every
+// refresh is a full re-read of the journal's tail, so nothing that happened
+// while off screen is lost, but waiting for the first tick would show a
+// stale table at exactly the moment the user is looking at it. UI thread
+// only.
+func (dp *daemonPage) refreshOnReappear() {
+	if dp.liveStop != nil {
+		dp.refreshLogs(true)
+	}
 }
 
 // setLive starts or stops the live refresh. Idempotent in both directions:

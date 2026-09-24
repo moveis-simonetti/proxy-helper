@@ -125,11 +125,11 @@ func resetProfileFlags(t *testing.T) {
 	t.Helper()
 	profileEnableTargets = []string{"all"}
 	profileEnableDryRun = false
-	profileEnableViaLocal = false
+	profileEnableNoViaLocal = false
 	profileDisableTargets = []string{"all"}
 	profileDisableDryRun = false
 	t.Cleanup(func() {
-		profileEnableViaLocal = false
+		profileEnableNoViaLocal = false
 		profileEnableDryRun = false
 	})
 }
@@ -145,10 +145,9 @@ const workProfileJSON = `{"active_profile":"","profiles":{
 func TestProfileEnableViaLocalKeepsCredentialOutOfTargets(t *testing.T) {
 	h := newHarness(t, workProfileJSON)
 	resetProfileFlags(t)
-	profileEnableViaLocal = true
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	got := h.sets()
@@ -179,10 +178,9 @@ func TestProfileEnableViaLocalKeepsCredentialOutOfTargets(t *testing.T) {
 func TestProfileEnableViaLocalActivatesTheNamedProfile(t *testing.T) {
 	h := newHarness(t, workProfileJSON)
 	resetProfileFlags(t)
-	profileEnableViaLocal = true
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	pf := h.profiles(t)
@@ -200,6 +198,12 @@ func TestProfileEnableViaLocalActivatesTheNamedProfile(t *testing.T) {
 // TestProfileEnableWithPlumbingTouchesNoTarget is the core of the second
 // axis: once the targets point at the daemon, switching profiles is pure
 // state. No target may be written, with or without sudo.
+//
+// No flag is passed: via-local is the CLI default now, but a bare "profile
+// enable" only forces app.Enable's route 1 (re-apply the plumbing) when the
+// plumbing is not already up (see the RunE in cmd/proxy_profile.go). Here
+// pf.ViaLocal is already true, so the default run takes route 2, the
+// pure-state switch this test guards.
 func TestProfileEnableWithPlumbingTouchesNoTarget(t *testing.T) {
 	h := newHarness(t, `{"active_profile":"work","via_local":true,"profiles":{
 		"work":{"scheme":"http","host":"proxy.corp","port":"8080","user":"alice","pass":"s3cr3t"},
@@ -225,14 +229,41 @@ func TestProfileEnableWithPlumbingTouchesNoTarget(t *testing.T) {
 	}
 }
 
-// TestProfileEnableWithoutPlumbingStillAppliesTheRealConfig keeps the legacy
-// flow intact for anyone not running the daemon.
+// TestProfileEnableWithPlumbingStillAppliesConnectivityCheck is the
+// exception to the test above: nm-connectivity's content depends on which
+// profile is active (its own ConnectivityCheckURL/Response), not on where
+// the plumbing points, so route 2 has to reapply it even though every other
+// target stays untouched. Regression test for the profile switch that used
+// to leave NetworkManager's connectivity check pointed at the network the
+// user just switched away from.
+func TestProfileEnableWithPlumbingStillAppliesConnectivityCheck(t *testing.T) {
+	h := newHarness(t, `{"active_profile":"work","via_local":true,"profiles":{
+		"work":{"scheme":"http","host":"proxy.corp","port":"8080"},
+		"home":{"scheme":"http","host":"home.proxy","port":"3128","connectivity_check_url":"http://192.168.1.1/","connectivity_check_response":"<html>"}}}`)
+	resetProfileFlags(t)
+
+	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"home"}); err != nil {
+		t.Fatalf("profile enable: %v", err)
+	}
+
+	if got := h.sets(); len(got) == 0 {
+		t.Fatal("profile enable must still apply nm-connectivity when the profile configures it")
+	}
+	pf := h.profiles(t)
+	if !pf.ViaLocal {
+		t.Error("applying nm-connectivity must not tear down the plumbing for every other target")
+	}
+}
+
+// TestProfileEnableWithoutPlumbingStillAppliesTheRealConfig keeps the
+// escape hatch intact for anyone not running the daemon.
 func TestProfileEnableWithoutPlumbingStillAppliesTheRealConfig(t *testing.T) {
 	h := newHarness(t, workProfileJSON)
 	resetProfileFlags(t)
+	profileEnableNoViaLocal = true
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable: %v", err)
+		t.Fatalf("profile enable --no-via-local: %v", err)
 	}
 
 	got := h.sets()
@@ -254,10 +285,9 @@ func TestViaLocalHonoursTheConfiguredPort(t *testing.T) {
 	h := newHarness(t, `{"local_port":9999,"profiles":{
 		"work":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
 	resetProfileFlags(t)
-	profileEnableViaLocal = true
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	for _, cfg := range h.sets() {
@@ -321,8 +351,13 @@ func TestProfileDisableRemembersTheProfile(t *testing.T) {
 	}
 
 	pf := h.profiles(t)
-	if pf.ActiveProfile != "" {
-		t.Errorf("ActiveProfile = %q, want empty", pf.ActiveProfile)
+	if pf.EffectiveMode() != proxy.ModeDirect {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeDirect)
+	}
+	// The selection survives the disable, which is what makes a bare
+	// "proxy on" afterwards unambiguous instead of a lookup in last_profile.
+	if pf.ActiveProfile != "work" {
+		t.Errorf("ActiveProfile = %q, want it still selected", pf.ActiveProfile)
 	}
 	if pf.LastProfile != "work" {
 		t.Errorf("LastProfile = %q, want work so that \"proxy on\" works", pf.LastProfile)
@@ -392,17 +427,18 @@ func TestWarnsWhenThePasswordCannotReachTargets(t *testing.T) {
 	h := newHarness(t, `{"profiles":{"work":{"scheme":"http","host":"proxy.corp","port":"8080",
 		"user":"alice","password_file":"/tmp/does-not-matter"}}}`)
 	resetProfileFlags(t)
+	profileEnableNoViaLocal = true
 
 	out := captureStdout(t, func() {
 		if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-			t.Fatalf("profile enable: %v", err)
+			t.Fatalf("profile enable --no-via-local: %v", err)
 		}
 	})
 
 	if !strings.Contains(out, "password_file") {
 		t.Errorf("expected a warning naming password_file, got:\n%s", out)
 	}
-	if !strings.Contains(out, "--via-local") {
+	if !strings.Contains(out, "--no-via-local") {
 		t.Errorf("the warning should point at the fix, got:\n%s", out)
 	}
 	// The warning must not be a substitute for doing the work.
@@ -491,7 +527,6 @@ func TestDockerTargetsGetABridgeAddress(t *testing.T) {
 		"work":{"scheme":"http","host":"proxy.corp","port":"8080"}}}`)
 	h.targets = []*fakeTarget{{name: "git"}, {name: "dockerd"}, {name: "docker-config"}}
 	resetProfileFlags(t)
-	profileEnableViaLocal = true
 
 	// bridgeAddr is a seam (see deps() in cmd/proxy.go) precisely so this
 	// test does not depend on the machine actually having a Docker bridge.
@@ -501,7 +536,7 @@ func TestDockerTargetsGetABridgeAddress(t *testing.T) {
 	t.Cleanup(func() { bridgeAddr = origBridgeAddr })
 
 	if err := proxyProfileEnableCmd.RunE(proxyProfileEnableCmd, []string{"work"}); err != nil {
-		t.Fatalf("profile enable --via-local: %v", err)
+		t.Fatalf("profile enable: %v", err)
 	}
 
 	for _, ft := range h.targets {

@@ -28,15 +28,43 @@ var proxyStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Checked before the unit state, and by probing rather than asking
+		// systemd: "active" means the process exists, not that it managed
+		// to bind. A daemon that lost its port is active and useless, and
+		// with every target pointing at it that is a machine with no
+		// network — the one thing worth saying before anything else.
+		health := app.CheckDaemon(pf, app.LiveDaemonChecks())
+		if health.Stranded() {
+			renderNotice(stdout(), app.Notice{
+				Kind: app.NoticeDaemonStranded,
+				Args: map[string]string{"port": fmt.Sprint(health.Port)},
+			})
+			fmt.Println()
+		}
+		// Outdated is quieter than stranded but just as silent a failure:
+		// the toggles all appear to work and none of them do.
+		if health.Outdated() {
+			renderNotice(stdout(), app.Notice{Kind: app.NoticeDaemonOutdated})
+			fmt.Println()
+		}
+
 		active := daemonActive()
+		// Keyed on the mode, not on whether a profile is selected: a
+		// selected profile with mode direct is the ordinary "off" state,
+		// and reporting it as proxying would be a lie.
+		mode := pf.EffectiveMode()
 		switch {
+		case health.Stranded():
+			fmt.Printf("daemon: NOT LISTENING on 127.0.0.1:%d\n\n", health.Port)
+		case active && !mode.Forwards():
+			fmt.Printf("daemon: active, mode %s (everything goes direct)\n\n", mode)
 		case active && pf.ActiveProfile == "":
 			fmt.Printf("daemon: active, no profile selected (everything goes direct)\n\n")
 		case active:
-			fmt.Printf("daemon: active (profile %q)\n\n", pf.ActiveProfile)
+			fmt.Printf("daemon: active, mode %s (profile %q)\n\n", mode, pf.ActiveProfile)
 		case pf.ViaLocal:
 			fmt.Printf("daemon: INACTIVE - targets point at 127.0.0.1:%d and will fail; run \"systemctl --user start %s\"\n\n",
-				pf.EffectiveLocalPort(), serve.UnitName)
+				health.Port, serve.UnitName)
 		default:
 			fmt.Printf("daemon: not in use\n\n")
 		}
@@ -93,7 +121,7 @@ func isInteractive() bool {
 }
 
 func init() {
-	proxyStatusCmd.Flags().StringSliceVar(&statusTargets, "targets", []string{"all"}, "comma-separated targets (shell,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,all)")
+	proxyStatusCmd.Flags().StringSliceVar(&statusTargets, "targets", []string{"all"}, "comma-separated targets (shell,session-env,system-env,git,npm,vscode,gnome,kde,dockerd,docker-config,lxd,snap,apt,nm-connectivity,all)")
 	proxyStatusCmd.Flags().BoolVarP(&statusYes, "yes", "y", false, "don't ask, immediately elevate via sudo for targets that need it")
 	proxyStatusCmd.Flags().BoolVar(&statusNoSudo, "no-sudo", false, "never elevate; show \"requires sudo to check\" instead of prompting")
 	proxyCmd.AddCommand(proxyStatusCmd)

@@ -96,13 +96,25 @@ func elevateCmd(binary, profile string, targets []string, xdgConfigHome string) 
 
 // elevateViaLocalCmd builds one elevated "proxy set --host ..." invocation
 // that points targets at host:port — the loopback or Docker-bridge address
-// of the local daemon — instead of using --via-local (see elevateCmd's
-// comment for why --via-local itself is never used here).
+// of the local daemon — instead of going through "proxy set"'s own
+// via-local default.
+//
+// --no-via-local is always passed: under pkexec this process runs as root,
+// with no XDG_RUNTIME_DIR and no user systemd manager, so DaemonActive()
+// always reports false even when the daemon is running as the invoking
+// user — app.Apply's via-local path would then fail every privileged
+// target with a misleading "the local proxy is not running" error.
+// Explicit --host/--port plus --no-via-local sidesteps DaemonActive() and
+// the profile/config lookup entirely, going straight to the direct write.
+// This used to be the CLI's default, so the flag was never needed; via-local
+// flipping to the default (see cmd/proxy_set.go) made it required — without
+// it, every elevated privileged apply silently regressed to this same
+// error, exactly the failure the two paragraphs above already describe.
 //
 // Passing the resolved address as an explicit --host/--port flag, rather
 // than through --profile, is safe here in a way it would not be for
 // --user/--pass: proxy.TargetConfig strips scheme/host/port/no-proxy down
-// to a credential-free URL for every --via-local target, so there is no
+// to a credential-free URL for every via-local target, so there is no
 // password in this URL for `ps` to leak — see page_status.go's apply() for
 // the full reasoning. --host and --profile are mutually exclusive in
 // "proxy set", so this shape never touches profile/config-file lookups at
@@ -116,6 +128,7 @@ func elevateViaLocalCmd(binary, host, port string, noProxy, targets []string, xd
 		"pkexec", "env", "XDG_CONFIG_HOME=" + xdgConfigHome,
 		binary, "proxy", "set",
 		"--host", host,
+		"--no-via-local",
 	}
 	if port != "" {
 		args = append(args, "--port", port)

@@ -8,6 +8,7 @@ import (
 
 	"proxy-helper/internal/app"
 	"proxy-helper/internal/proxy"
+	"proxy-helper/internal/serve"
 
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -18,9 +19,18 @@ import (
 type headerbarCtl struct {
 	combo        *gtk.ComboBoxText
 	masterSwitch *gtk.Switch
+	autoCheck    *gtk.CheckButton
 	statusLabel  *gtk.Label
 	runner       *runner
 	topWindow    *gtk.Window
+
+	// mode and reachable are what the widgets were last painted from.
+	// A gesture on one control has to be combined with the other's current
+	// position to mean anything (see modeFromGesture), and reading it back
+	// off a widget mid-handler is exactly how the old revert logic got
+	// confusing.
+	mode      proxy.Mode
+	reachable bool
 
 	// onProfileChanged is called after a successful Enable, so the Status
 	// page's own view of target state stays in sync with whatever the
@@ -58,6 +68,7 @@ func setupHeaderbar(win *window, r *runner) (*headerbarCtl, error) {
 	h := &headerbarCtl{
 		combo:        win.ProfileCombo,
 		masterSwitch: win.MasterSwitch,
+		autoCheck:    win.AutoCheck,
 		statusLabel:  win.StatusLabel,
 		runner:       r,
 		topWindow:    win.Window,
@@ -89,8 +100,19 @@ func setupHeaderbar(win *window, r *runner) (*headerbarCtl, error) {
 		if h.repopulating {
 			return false
 		}
-		h.trySetMaster(state)
+		// The switch only acts when the lock is off; with auto on it is a
+		// readout, and SetSensitive(false) already keeps it from firing.
+		h.trySetMode(modeFromGesture(false, state))
 		return false
+	})
+
+	h.autoCheck.Connect("toggled", func() {
+		if h.repopulating {
+			return
+		}
+		// Turning the lock off freezes what is in force rather than
+		// jumping to a default — see modeFromGesture.
+		h.trySetMode(modeFromGesture(h.autoCheck.GetActive(), h.reachable))
 	})
 
 	return h, nil
@@ -102,13 +124,20 @@ func setupHeaderbar(win *window, r *runner) (*headerbarCtl, error) {
 func (h *headerbarCtl) refresh() {
 	h.runner.submit(func() func() {
 		pf, err := proxy.LoadProfiles()
-		return func() { h.applyProfiles(pf, err) }
+		// The daemon's own view, not a probe of our own: in auto the
+		// effective routing depends on a verdict only the daemon holds, and
+		// a header that disagreed with the routing actually in force would
+		// be worse than one that showed nothing. A stopped daemon publishes
+		// nothing, and the zero value's Forwarding=false is the honest
+		// answer for that.
+		rs, _ := serve.ReadRuntimeState()
+		return func() { h.applyProfiles(pf, err, rs.UpstreamReachable) }
 	})
 }
 
 // applyProfiles rebuilds the combo's entries from pf and selects whatever
 // is active. Runs on the UI thread only, from a runner delivery.
-func (h *headerbarCtl) applyProfiles(pf *proxy.ProfileFile, err error) {
+func (h *headerbarCtl) applyProfiles(pf *proxy.ProfileFile, err error, reachable bool) {
 	h.repopulating = true
 	defer func() { h.repopulating = false }()
 
@@ -121,7 +150,9 @@ func (h *headerbarCtl) applyProfiles(pf *proxy.ProfileFile, err error) {
 		h.combo.SetActiveID("")
 		h.combo.SetSensitive(false)
 		h.current = ""
-		h.applyMasterState(false)
+		// No profile means nothing to forward to, whatever the config
+		// happens to say.
+		h.applyMasterState(proxy.ModeDirect, false)
 		return
 	}
 
@@ -142,58 +173,66 @@ func (h *headerbarCtl) applyProfiles(pf *proxy.ProfileFile, err error) {
 	h.combo.SetSensitive(len(names) > 0)
 	h.current = active
 	h.combo.SetActiveID(active)
-	h.applyMasterState(active != "")
+	h.applyMasterState(pf.EffectiveMode(), reachable)
 }
 
-// applyMasterState paints the master switch and its label to match active,
-// via masterLabel (window.go) so the two never disagree. Callers are
-// responsible for the repopulating guard: applyProfiles is already inside
-// one when it calls this, and trySetMaster's revert path sets its own.
-func (h *headerbarCtl) applyMasterState(active bool) {
-	h.masterSwitch.SetActive(active)
-	h.statusLabel.SetLabel(masterLabel(active))
-	h.statusLabel.SetTooltipText(masterLabel(active))
+// applyMasterState paints the lock, the switch and the label from one mode,
+// through modeSwitchState/modeLabel so the three can never disagree.
+//
+// The switch goes insensitive under the lock rather than being hidden: in
+// auto it is still the most direct readout of what the daemon is doing, and
+// a control that vanishes teaches the user less than one that visibly moves
+// on its own. The tooltip carries the reason it will not respond.
+//
+// Callers own the repopulating guard: applyProfiles is already inside one
+// when it calls this, and the revert path sets its own.
+func (h *headerbarCtl) applyMasterState(m proxy.Mode, reachable bool) {
+	h.mode, h.reachable = m, reachable
+	lock, on := modeSwitchState(m, reachable)
+
+	h.autoCheck.SetActive(lock)
+	h.masterSwitch.SetActive(on)
+	h.masterSwitch.SetSensitive(!lock)
+
+	label := modeLabel(m, reachable)
+	tooltip := modeTooltip(m, reachable, false)
+	h.statusLabel.SetLabel(label)
+	h.statusLabel.SetTooltipText(tooltip)
+	h.masterSwitch.SetTooltipText(tooltip)
+	h.autoCheck.SetTooltipText(tooltip)
 }
 
-// trySetMaster runs app.On/app.Off off the UI thread in response to the
-// user flipping the master switch. Like doEnable, EscalateNone is mandatory:
-// On/Off never touch a target, but ReloadDaemon still goes through this
-// Executor, and a blocking password prompt here would freeze the window
+// trySetMode runs app.SetMode off the UI thread in response to the user
+// moving the switch or the auto lock.
+//
+// EscalateNone is mandatory, for the same reason it was on the old On/Off
+// path: SetMode never touches a target, but ReloadDaemon still goes through
+// this Executor, and a blocking password prompt here would freeze the window
 // with no way out.
 //
-// app.On("") failing is not a bug: it is the ordinary case of a machine
-// where the user never activated anything, so there is no last_profile to
-// restore. That gets the friendly message below and the switch snapped back
-// to off, rather than being treated like an unexpected error.
-func (h *headerbarCtl) trySetMaster(state bool) {
+// A refusal is not a bug: SetMode rejects a forwarding mode with no profile
+// selected, which is the ordinary state of a machine where nothing was ever
+// configured. That gets the friendly message below and the controls snapped
+// back, rather than being treated like an unexpected error.
+func (h *headerbarCtl) trySetMode(m proxy.Mode) {
+	prevMode, prevReachable := h.mode, h.reachable
 	h.runner.submit(func() func() {
 		ex := &proxy.Executor{Escalation: proxy.EscalateNone}
-		if state {
-			_, err := app.On(statusDeps(), ex, "")
-			return func() {
-				if err != nil {
-					// Revert BEFORE the dialog, not after: the modal
-					// blocks on dlg.Run() until the user closes it, and
-					// during that wait the switch must already show the
-					// truth (off) rather than sitting on "Ativo" behind a
-					// dialog that says activation failed — the window
-					// would otherwise contradict itself to the user's
-					// face for as long as the dialog stays open.
-					h.revertMaster(false)
-					h.showError("Nenhum perfil para ativar. Escolha um no seletor ao lado.")
-					return
-				}
-				h.syncAfterMasterChange()
-			}
-		}
-		_, err := app.Off(statusDeps(), ex)
+		_, err := app.SetMode(statusDeps(), ex, m)
 		return func() {
 			if err != nil {
-				// Same ordering as the On branch above, for the same
-				// reason: the switch must already reflect reality before
-				// the blocking dialog opens.
-				h.revertMaster(true)
-				h.showError(fmt.Sprintf("erro ao desativar proxy: %s", err))
+				// Revert BEFORE the dialog, not after: the modal blocks on
+				// dlg.Run() until the user closes it, and during that wait
+				// the controls must already show the truth rather than
+				// sitting on a state the daemon refused — the window would
+				// otherwise contradict itself to the user's face for as
+				// long as the dialog stays open.
+				h.revertMaster(prevMode, prevReachable)
+				if m.Forwards() {
+					h.showError("Nenhum perfil para ativar. Escolha um no seletor ao lado.")
+				} else {
+					h.showError(fmt.Sprintf("erro ao trocar o modo: %s", err))
+				}
 				return
 			}
 			h.syncAfterMasterChange()
@@ -216,9 +255,9 @@ func (h *headerbarCtl) trySetMaster(state bool) {
 // synchronous (no I/O) confirmation and has to defer its revert with
 // r.post for this same reason. Do not "simplify" that call into an inline
 // SetActive to match this function; it does not stick.
-func (h *headerbarCtl) revertMaster(active bool) {
+func (h *headerbarCtl) revertMaster(m proxy.Mode, reachable bool) {
 	h.repopulating = true
-	h.applyMasterState(active)
+	h.applyMasterState(m, reachable)
 	h.repopulating = false
 }
 
@@ -340,10 +379,13 @@ func (h *headerbarCtl) doEnable(name string, includePrivileged bool) {
 			//
 			// The repopulating guard is this caller's responsibility (see
 			// applyMasterState): without it, SetActive fires "state-set" and
-			// trySetMaster would run app.On on top of the enable that just
+			// trySetMode would run SetMode on top of the enable that just
 			// finished.
+			//
+			// Enabling a profile selects it, and selecting implies auto —
+			// the same rule SelectProfile applies on disk.
 			h.repopulating = true
-			h.applyMasterState(true)
+			h.applyMasterState(proxy.ModeAuto, h.reachable)
 			h.repopulating = false
 
 			h.showEnableResult(res, privOut)

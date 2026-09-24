@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 var (
 	servePort           int
 	serveQuiet          bool
+	serveDebug          bool
 	serveDockerBridge   bool
 	serveNoDockerBridge bool
 	serveInstallDry     bool
@@ -35,12 +37,22 @@ var proxyServeCmd = &cobra.Command{
 		"This runs in the foreground; use \"proxy serve install\" to run it as a " +
 		"systemd user service.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logger := serve.NewLogger(os.Stdout, serveQuiet)
+		logLevel := slog.LevelInfo
+		switch {
+		case serveDebug:
+			// --debug wins over --quiet: asking for per-probe-attempt
+			// detail implies wanting more, not less.
+			logLevel = slog.LevelDebug
+		case serveQuiet:
+			logLevel = slog.LevelWarn
+		}
+		logger := serve.NewLoggerLevel(os.Stdout, logLevel)
 
 		pf, err := proxy.LoadProfiles()
 		if err != nil {
 			return err
 		}
+		selfApplyUserTargets(logger, pf)
 		// Without an explicit --port, listen where the targets were told
 		// to look. Guessing 8888 here would silently strand a daemon
 		// installed on another port.
@@ -65,6 +77,22 @@ var proxyServeCmd = &cobra.Command{
 			Handler:           serve.NewServer(state, logger).Handler(),
 			ReadHeaderTimeout: 20 * time.Second,
 		}
+
+		// The published runtime state is how anything outside this process
+		// learns what the daemon is really doing: in mode auto that answer
+		// depends on a probe verdict held only here, so config.json alone
+		// cannot supply it.
+		state.SetPort(servePort)
+		if err := state.PublishRuntimeState(); err != nil {
+			logger.Warn("runtime_state_write_failed", "error", err.Error())
+		}
+		defer func() { _ = serve.ClearRuntimeState() }()
+
+		// The prober keeps mode auto's verdict current. It is idle in the
+		// other modes, and Reload wakes it when the upstream changes.
+		probeCtx, stopProbe := context.WithCancel(context.Background())
+		defer stopProbe()
+		go state.Watch(probeCtx, serve.WatchOptions{})
 
 		hup := make(chan os.Signal, 1)
 		signal.Notify(hup, syscall.SIGHUP)
@@ -159,7 +187,7 @@ var proxyServeInstallCmd = &cobra.Command{
 			return err
 		}
 
-		if err := serve.InstallUnit(ex, execPath, servePort, dockerBridge); err != nil {
+		if err := serve.InstallUnit(ex, execPath, servePort, dockerBridge, serveDebug); err != nil {
 			return err
 		}
 		if !serveInstallDry {
@@ -232,11 +260,11 @@ func nextStepHint(pf *proxy.ProfileFile) string {
 	switch len(names) {
 	case 0:
 		return "save a profile with \"proxy profile add <name> --host <host> --port <port>\", " +
-			"then run \"proxy set --profile <name> --via-local\" to point your targets at it"
+			"then run \"proxy set --profile <name>\" to point your targets at it"
 	case 1:
-		return fmt.Sprintf("run \"proxy set --profile %s --via-local\" to point your targets at it", names[0])
+		return fmt.Sprintf("run \"proxy set --profile %s\" to point your targets at it", names[0])
 	default:
-		return fmt.Sprintf("run \"proxy set --profile <name> --via-local\" to point your targets at it (profiles: %s)",
+		return fmt.Sprintf("run \"proxy set --profile <name>\" to point your targets at it (profiles: %s)",
 			strings.Join(names, ", "))
 	}
 }
@@ -251,7 +279,7 @@ var proxyServeUninstallCmd = &cobra.Command{
 		}
 		if !serveUninstallDry {
 			fmt.Println("removed " + serve.UnitName)
-			fmt.Println("note: targets configured with --via-local still point at the local proxy; run \"proxy set\" or \"proxy unset\" to change them")
+			fmt.Println("note: your targets still point at the local proxy; run \"proxy set\" or \"proxy unset\" to change them")
 		}
 		return nil
 	},
@@ -261,8 +289,10 @@ func init() {
 	proxyServeCmd.Flags().IntVar(&servePort, "port", proxy.DefaultLocalPort, "port to listen on (loopback, plus the Docker bridge with --docker-bridge)")
 	proxyServeCmd.Flags().BoolVar(&serveDockerBridge, "docker-bridge", false, "also listen on the Docker bridge so build containers can reach the proxy; this lets every container on the machine use it")
 	proxyServeCmd.Flags().BoolVar(&serveQuiet, "quiet", false, "log only warnings and errors instead of every request")
+	proxyServeCmd.Flags().BoolVar(&serveDebug, "debug", false, "also log every individual reachability probe attempt (mode auto), not just up/down transitions; overrides --quiet")
 	proxyServeInstallCmd.Flags().IntVar(&servePort, "port", proxy.DefaultLocalPort, "port the service should listen on")
 	proxyServeInstallCmd.Flags().BoolVar(&serveDockerBridge, "docker-bridge", false, "also listen on the Docker bridge so build containers can reach the proxy; this lets every container on the machine use it")
+	proxyServeInstallCmd.Flags().BoolVar(&serveDebug, "debug", false, "also log every individual reachability probe attempt (mode auto), not just up/down transitions; not persisted, so a later reinstall without this flag turns it back off")
 	proxyServeInstallCmd.Flags().BoolVar(&serveNoDockerBridge, "no-docker-bridge", false, "stop listening on the Docker bridge and clear the saved preference")
 	proxyServeInstallCmd.Flags().BoolVar(&serveInstallDry, "dry-run", false, "print what would change without applying it")
 	proxyServeUninstallCmd.Flags().BoolVar(&serveUninstallDry, "dry-run", false, "print what would change without applying it")

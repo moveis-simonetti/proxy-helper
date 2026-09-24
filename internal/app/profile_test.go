@@ -79,11 +79,14 @@ func TestOffRemembersWhatItTurnedOff(t *testing.T) {
 	}
 
 	pf, _ := proxy.LoadProfiles()
-	if pf.ActiveProfile != "" {
-		t.Errorf("active_profile = %q, want empty", pf.ActiveProfile)
+	if pf.EffectiveMode() != proxy.ModeDirect {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeDirect)
 	}
-	// Off must remember the profile, or "proxy on" afterwards has nothing
-	// to restore.
+	// The profile stays selected: routing is the mode's job now, so there
+	// is nothing for a later "proxy on" to restore.
+	if pf.ActiveProfile != "corp" {
+		t.Errorf("active_profile = %q, want it still selected", pf.ActiveProfile)
+	}
 	if pf.LastProfile != "corp" {
 		t.Errorf("last_profile = %q, want %q", pf.LastProfile, "corp")
 	}
@@ -134,6 +137,37 @@ func TestEnableLeavesTargetsAloneWhenAlreadyPlumbed(t *testing.T) {
 	pf, _ := proxy.LoadProfiles()
 	if pf.ActiveProfile != "corp" {
 		t.Errorf("active_profile = %q, want %q", pf.ActiveProfile, "corp")
+	}
+}
+
+// The one exception to route 2's "touch nothing" rule: nm-connectivity's
+// content is the profile's own (ConnectivityCheckURL/Response), not the
+// daemon's address, so switching to a profile that leaves it unset must
+// still clean up a previous profile's file — Status reporting Enabled:true
+// stands in for that stale file existing on disk (see nmConnectivityTarget,
+// whose Status really does read one).
+func TestEnableCleansUpAStaleTargetOnAnUnconfiguredProfile(t *testing.T) {
+	isolateConfig(t, `{"via_local":true,"profiles":{
+		"corp":{"host":"p.example"},
+		"other":{"host":"o.example"}}}`)
+
+	tg := &fakeTarget{name: "nm-connectivity", available: true, enabled: true}
+	d := depsFor(tg)
+	d.ReloadDaemon = func(*proxy.Executor) error { return nil }
+
+	res, err := Enable(d, &proxy.Executor{}, "other", []string{"all"}, false)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if res.TargetsUntouched {
+		t.Error("TargetsUntouched = true, want false: a stale file needed cleaning up")
+	}
+	if len(tg.setCfgs) != 1 {
+		t.Fatalf("nm-connectivity Set called %d times, want 1", len(tg.setCfgs))
+	}
+	if tg.setCfgs[0].ConnectivityCheckURL != "" {
+		t.Errorf("Set received ConnectivityCheckURL %q, want empty — \"other\" never configured one",
+			tg.setCfgs[0].ConnectivityCheckURL)
 	}
 }
 
@@ -235,11 +269,11 @@ func TestDisableClearsTargetsAndThenTheState(t *testing.T) {
 	d := depsFor(tg)
 	d.ReloadDaemon = func(*proxy.Executor) error { return nil }
 
-	rep, err := Disable(d, &proxy.Executor{}, "corp", []string{"all"})
+	res, err := Disable(d, &proxy.Executor{}, "corp", []string{"all"})
 	if err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	if rep == nil {
+	if res.Report == nil {
 		t.Fatal("Report is nil")
 	}
 	if tg.unsets != 1 {
@@ -247,8 +281,13 @@ func TestDisableClearsTargetsAndThenTheState(t *testing.T) {
 	}
 
 	pf, _ := proxy.LoadProfiles()
-	if pf.ActiveProfile != "" {
-		t.Errorf("active_profile = %q, want empty", pf.ActiveProfile)
+	// The routing decision moved to mode; the selection deliberately
+	// survives so the profile stays visible while traffic goes direct.
+	if pf.EffectiveMode() != proxy.ModeDirect {
+		t.Errorf("mode = %q, want %q", pf.EffectiveMode(), proxy.ModeDirect)
+	}
+	if pf.ActiveProfile != "corp" {
+		t.Errorf("active_profile = %q, want it still selected", pf.ActiveProfile)
 	}
 	if pf.LastProfile != "corp" {
 		t.Errorf("last_profile = %q, want %q", pf.LastProfile, "corp")

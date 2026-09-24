@@ -2,6 +2,7 @@ package gui
 
 import (
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,7 +151,7 @@ func TestSummarizeStates(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := summarize(c.active, c.installed, 8888, "", "")
+			got := summarize(c.active, c.installed, nil, "")
 			if got.State != c.want {
 				t.Errorf("State = %q, want %q", got.State, c.want)
 			}
@@ -158,15 +159,30 @@ func TestSummarizeStates(t *testing.T) {
 	}
 }
 
-func TestSummarizeListen(t *testing.T) {
-	got := summarize(true, true, 8888, "", "")
+// Listen now renders what was *observed* on the machine, not what config
+// implies. The distinction is the whole point of the change: a saved
+// docker_bridge preference the running daemon never acted on used to show up
+// here as an address nothing was bound to.
+func TestSummarizeListenShowsObservedAddrs(t *testing.T) {
+	got := summarize(true, true, []string{"127.0.0.1:8888"}, "")
 	if got.Listen != "127.0.0.1:8888" {
-		t.Errorf("Listen (no bridge) = %q, want %q", got.Listen, "127.0.0.1:8888")
+		t.Errorf("Listen (loopback only) = %q, want %q", got.Listen, "127.0.0.1:8888")
 	}
 
-	got = summarize(true, true, 8888, "172.17.0.1:8888", "")
-	if got.Listen != "127.0.0.1:8888, 172.17.0.1:8888" {
-		t.Errorf("Listen (with bridge) = %q, want %q", got.Listen, "127.0.0.1:8888, 172.17.0.1:8888")
+	got = summarize(true, true, []string{"127.0.0.1:8888", "172.17.0.1:8888"}, "")
+	want := "127.0.0.1:8888, 172.17.0.1:8888"
+	if got.Listen != want {
+		t.Errorf("Listen (with bridge) = %q, want %q", got.Listen, want)
+	}
+}
+
+// A daemon that is installed but stopped is bound to nothing, and saying
+// "127.0.0.1:8888" there would be the same lie in the other direction. The
+// State label already carries "Parado"; Listen says there is no address.
+func TestSummarizeListenWhenNothingIsBound(t *testing.T) {
+	got := summarize(false, true, nil, "")
+	if got.Listen != "—" {
+		t.Errorf("Listen (stopped) = %q, want %q", got.Listen, "—")
 	}
 }
 
@@ -184,22 +200,13 @@ func TestDaemonPending(t *testing.T) {
 	}
 }
 
-func TestDaemonPrimaryActionLabel(t *testing.T) {
-	if got := daemonPrimaryActionLabel(false); got != "Instalar serviço" {
-		t.Errorf("not installed: got %q, want %q", got, "Instalar serviço")
-	}
-	if got := daemonPrimaryActionLabel(true); got != "Aplicar alterações" {
-		t.Errorf("installed: got %q, want %q", got, "Aplicar alterações")
-	}
-}
-
 func TestSummarizeProfile(t *testing.T) {
-	got := summarize(true, true, 8888, "", "")
+	got := summarize(true, true, nil, "")
 	if got.Profile != "nenhum" {
 		t.Errorf("Profile (empty) = %q, want %q", got.Profile, "nenhum")
 	}
 
-	got = summarize(true, true, 8888, "", "work")
+	got = summarize(true, true, nil, "work")
 	if got.Profile != "work" {
 		t.Errorf("Profile = %q, want %q", got.Profile, "work")
 	}
@@ -234,5 +241,84 @@ func TestSameRowsIsTrueForAnUnchangedRead(t *testing.T) {
 func TestSameRowsIsTrueForTwoEmptyReads(t *testing.T) {
 	if !sameRows(nil, []logRow{}) {
 		t.Error("sameRows = false para duas leituras vazias")
+	}
+}
+
+// TestPortChangeStrandsTargets covers the gap this warning exists for:
+// applyPrimary saves the new port and reinstalls the unit, but never
+// re-applies the targets, so every one of them keeps pointing at the old
+// port until the user goes back to the Status page and applies again.
+// Silently, that surfaces later as "the proxy stopped working".
+func TestPortChangeStrandsTargets(t *testing.T) {
+	if !portChangeStrandsTargets(8888, 9090) {
+		t.Error("a port change leaves every target on the old port; it must warn")
+	}
+	if portChangeStrandsTargets(8888, 8888) {
+		t.Error("the port did not change, so nothing went stale")
+	}
+}
+
+// TestStaleTargetsWarningNamesBothPorts keeps the message actionable: the
+// user needs to see what the targets still say and what they should say,
+// otherwise the warning is just noise.
+func TestStaleTargetsWarningNamesBothPorts(t *testing.T) {
+	got := staleTargetsWarning(8888, 9090)
+	if !strings.Contains(got, "8888") || !strings.Contains(got, "9090") {
+		t.Errorf("the warning must name the old and the new port, got: %q", got)
+	}
+}
+
+// TestStaleBridgeWarningNamesTheTargets keeps the fallback message
+// actionable even without port numbers to point at.
+func TestStaleBridgeWarningNamesTheTargets(t *testing.T) {
+	got := staleBridgeWarning()
+	if !strings.Contains(got, "dockerd") || !strings.Contains(got, "docker-config") {
+		t.Errorf("the warning must name the two docker targets, got: %q", got)
+	}
+}
+
+// TestDaemonApplyMessageCarriesTheWarning keeps the warning attached to the
+// result the user is already reading. Shown anywhere else it would compete
+// with the "alterações aplicadas" line and be missed.
+func TestDaemonApplyMessageCarriesTheWarning(t *testing.T) {
+	got := daemonApplyMessage(true, staleTargetsWarning(8888, 9090))
+	if !strings.Contains(got, "aplicadas") {
+		t.Errorf("the usual confirmation must survive, got: %q", got)
+	}
+	if !strings.Contains(got, "9090") {
+		t.Errorf("the warning must be part of the same message, got: %q", got)
+	}
+}
+
+// TestDaemonApplyMessageWithoutWarningIsUnchanged guards the normal path:
+// the warning is the exception, and its absence must leave the existing
+// message exactly as it was.
+func TestDaemonApplyMessageWithoutWarningIsUnchanged(t *testing.T) {
+	if got := daemonApplyMessage(true, ""); got != "alterações aplicadas" {
+		t.Errorf("expected the untouched confirmation, got: %q", got)
+	}
+	if got := daemonApplyMessage(false, ""); got != "serviço instalado" {
+		t.Errorf("expected the first-install message, got: %q", got)
+	}
+}
+
+// The bug this covers: the bridge switch changes intent, not the system, and
+// the only signal that something was pending was the primary button turning
+// sensitive — quiet enough that a user turned the switch on, closed the
+// window, and reported the bridge as broken. The notice says it in words.
+func TestDaemonPendingNotice(t *testing.T) {
+	if got := daemonPendingNotice(false); got != "" {
+		t.Errorf("daemonPendingNotice(false) = %q, want empty", got)
+	}
+
+	got := daemonPendingNotice(true)
+	if got == "" {
+		t.Fatal("daemonPendingNotice(true) = empty, want a notice")
+	}
+	// Naming the button is what makes the notice actionable rather than
+	// just alarming, so it must stay in sync with daemonSaveLabel.
+	if !strings.Contains(got, daemonSaveLabel) {
+		t.Errorf("daemonPendingNotice(true) = %q, want it to name %q",
+			got, daemonSaveLabel)
 	}
 }

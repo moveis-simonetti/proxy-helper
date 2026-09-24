@@ -14,6 +14,14 @@ func NewLogger(w io.Writer, quiet bool) *slog.Logger {
 	if quiet {
 		level = slog.LevelWarn
 	}
+	return NewLoggerLevel(w, level)
+}
+
+// NewLoggerLevel builds the daemon's logger at an explicit level, for
+// callers that need more than the quiet/default choice NewLogger offers —
+// currently just --debug, which drops to LevelDebug to surface probe.go's
+// per-attempt logging (see Watch) instead of only the up/down transitions.
+func NewLoggerLevel(w io.Writer, level slog.Level) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
 }
 

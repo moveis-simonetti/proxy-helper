@@ -58,9 +58,16 @@ Todo comando que mexe em configurações de proxy aceita `--targets`, uma lista
 separada por vírgula (ou `all`, o padrão):
 
 - `shell` — `~/.bashrc` / `~/.zshrc`
+- `session-env` — variáveis de ambiente da sessão gráfica, para aplicativos
+  de janela (veja abaixo)
+- `system-env` — variáveis de proxy em `/etc/environment`, para todo login
+  PAM da máquina, inclusive o `root` (veja abaixo); exige `sudo`
 - `git`
 - `npm`
-- `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato (Cursor, Antigravity)
+- `vscode` — `settings.json` do VS Code e forks que usam o mesmo formato
+  (Cursor, Antigravity); detecta as instalações nativa, Snap
+  (`~/snap/code/current/.config`) e Flatpak (`~/.var/app/…/config`), e
+  configura cada uma separadamente
 - `gnome` — configurações de proxy do sistema GNOME
 - `kde` — proxy do KIO (KDE Plasma), via `kwriteconfig`
 - `dockerd` — o daemon do Docker
@@ -68,22 +75,144 @@ separada por vírgula (ou `all`, o padrão):
 - `lxd` — o daemon do LXD, via `lxc config`
 - `snap`
 - `apt`
+- `nm-connectivity` — a checagem de conectividade do NetworkManager (veja
+  abaixo); exige `sudo`, e só faz algo se `connectivity_check_url` estiver
+  configurado no perfil
 
 Targets não disponíveis no sistema atual (ex: `gnome` fora de uma sessão
 GNOME, `kde` fora do Plasma, `snap`/`lxd` onde o pacote correspondente não
 está instalado) são pulados automaticamente.
+
+### `session-env` e aplicativos de janela
+
+O target `shell` alcança apenas terminais: `~/.bashrc` e `~/.zshrc` são lidos
+quando você abre um shell, não quando o GNOME lança um aplicativo pelo menu.
+Aplicativos como 1Password, Discord e Postman têm componentes nativos que
+leem `HTTPS_PROXY` do próprio ambiente e ignoram as configurações do GNOME —
+sem `session-env`, eles ficam sem internet enquanto o resto do sistema
+funciona.
+
+`session-env` fecha esse buraco escrevendo em duas camadas:
+
+- `~/.config/environment.d/50-proxy-helper.conf`, lido pelo `systemd --user`
+  no login, para a configuração sobreviver a reinicializações;
+- `systemctl --user set-environment` e `dbus-update-activation-environment`,
+  que valem imediatamente, para aplicativos abertos a partir de agora.
+
+**Aplicativos já em execução não são afetados.** O ambiente de um processo é
+fixado no momento em que ele é iniciado e não pode ser reescrito de fora —
+limitação do sistema operacional, não da ferramenta. Depois de aplicar (ou de
+trocar a porta do daemon), feche e abra os aplicativos de janela para que eles
+peguem a configuração nova. Quando a sessão viva discorda do perfil, o
+`proxy status` avisa:
+
+```
+session-env  true  true  http://127.0.0.1:8888 — profile uses port 9090; re-apply, then relaunch GUI apps
+```
+
+Fora de uma sessão gráfica (servidor, container, SSH puro) não há
+`systemd --user` para conversar, e o target é pulado como qualquer outro
+indisponível.
+
+### `system-env` e o `root`
+
+`shell` e `session-env` só alcançam o usuário que rodou o comando — nada que
+o `root` leia é tocado. Numa rede que só sai por proxy, isso deixa
+`sudo apt update`, `sudo curl` e afins sem internet: o `sudo` roda com
+`env_reset` e descarta `HTTP_PROXY`/`HTTPS_PROXY` do ambiente.
+
+`system-env` fecha esse buraco escrevendo um bloco marcado em
+`/etc/environment`, lido pelo `pam_env` na criação de qualquer sessão PAM —
+login no console, `ssh root@host`, `su -`, `sudo -i` e, no Debian/Ubuntu
+(onde `/etc/pam.d/sudo` inclui `pam_env`), também o `sudo <comando>` comum.
+Só as linhas do bloco são gerenciadas; o resto do arquivo (`PATH`, `LANG`, …)
+fica intacto.
+
+**É um arquivo do sistema, não por usuário.** Toda conta da máquina passa a
+receber essas variáveis no login, não só quem aplicou. Para uma máquina
+inteira atrás de um proxy isso costuma ser o desejado, mas é um alcance maior
+que o dos outros targets de ambiente — por isso é um target separado e
+explícito, e exige `sudo`.
+
+Como em `session-env`, **processos já em execução não são afetados**, e o
+systemd de _serviços de sistema_ não lê `/etc/environment` (o `dockerd`, por
+exemplo, é tratado pelo target `dockerd`).
 
 `proxy unset --targets gnome` também limpa o cache de proxy do PackageKit
 (usado por GNOME Software/Discover) quando presente, contornando um bug
 onde ele mantém o proxy antigo mesmo depois do proxy do sistema ser
 desligado; isso pode pedir sudo mesmo sem `snap`/`apt` no `--targets`.
 
+### `nm-connectivity` e o ícone de "conectividade limitada"
+
+Numa rede que só sai por proxy, o NetworkManager mostra "conectividade
+limitada" mesmo com tudo funcionando: a checagem de conectividade dele
+(`nmcli general status`) faz uma requisição HTTP direta, sem proxy, e não
+tem nenhum jeito de configurar um proxy para ela — nem por
+`NetworkManager.conf`, nem pelas configurações de proxy por conexão
+(`proxy.method`/`proxy.pac-script`, que servem só para distribuir a config a
+outros consumidores via D-Bus, não para a própria checagem do NetworkManager
+usar). Testado e confirmado nesta sessão.
+
+A única correção real é apontar a checagem para algo que a rede em questão
+responda **sem** proxy — o que é sempre específico de cada rede (não dá para
+descobrir isso automaticamente). Se você tiver algo assim (por exemplo, o
+próprio host do proxy respondendo em uma porta sem passar pelo túnel de
+proxy), configure no perfil:
+
+```
+proxy profile edit "Escritório Simonetti" \
+  --connectivity-check-url "http://192.168.111.70/" \
+  --connectivity-check-response "<html>"
+```
+
+`--connectivity-check-response` precisa bater com o **início** do corpo da
+resposta (é assim que o NetworkManager decide sucesso/falha). Depois de
+configurar, rode `proxy profile enable "Escritório Simonetti"` (editar o
+perfil sozinho não reaplica os targets) para escrever
+`/etc/NetworkManager/conf.d/95-proxy-helper-connectivity.conf` e recarregar o
+NetworkManager.
+
+Sem `connectivity_check_url` configurado (o padrão), esse target não faz
+nada — nenhum `sudo`, nenhum arquivo escrito.
+
+**Se ajusta sozinho a troca de rede.** A URL só responde sem proxy naquela
+rede específica; em qualquer outra (casa, hotspot, outro escritório), ela
+fica inalcançável. Por isso o `Set` também instala um *dispatcher script* do
+NetworkManager (`/etc/NetworkManager/dispatcher.d/90-proxy-helper-connectivity`)
+que roda a cada troca de rede (`up`/`connectivity-change`) e testa a URL de
+verdade — se responder, garante a configuração ativa; se não, remove
+(deixando o NetworkManager cair de volta na checagem padrão dele, que
+funciona normalmente em qualquer rede com internet direta). O script chama
+`proxy-helper sync-connectivity` (comando interno) como `root`, então grava
+o `HOME`/`XDG_CONFIG_HOME` de quem configurou na hora do `Set` — `root` não
+tem `config.json` próprio, e adivinhar "o usuário logado agora" seria errado
+numa máquina com mais de uma conta.
+
+`proxy off` e `proxy mode direct` também acompanham isso: se o perfil ativo
+tiver `connectivity_check_url` configurado, ir para o modo direto limpa a
+checagem (faz sentido — sem proxy, a rede volta a ser genuinamente
+"limitada" para quem depende dele), e sair do direto a reaplica. É a única
+exceção à promessa de "sem sudo, instantâneo" desses dois comandos — sem o
+campo configurado, continuam exatamente como sempre foram.
+
+Trocar de perfil (`proxy profile enable <nome>`) também limpa a checagem
+antiga automaticamente ao sair de um perfil que a configurava, mesmo que o
+novo não configure uma própria.
+
+`proxy off` e `proxy mode direct` também acompanham isso: se o perfil ativo
+tiver `connectivity_check_url` configurado, ir para o modo direto limpa a
+checagem (faz sentido — sem proxy, a rede volta a ser genuinamente
+"limitada" para quem depende dele), e sair do direto a reaplica. É a única
+exceção à promessa de "sem sudo, instantâneo" desses dois comandos — sem o
+campo configurado, continuam exatamente como sempre foram.
+
 ## Uso pontual
 
 ```
 proxy-helper proxy set --host 10.0.0.5 --port 8080 [--scheme http|https|socks5] \
   [--user USER] [--pass PASS] [--no-proxy localhost,127.0.0.1] \
-  [--targets shell,git,npm,...] [--dry-run]
+  [--targets shell,session-env,git,...] [--dry-run]
 
 proxy-helper proxy unset [--targets ...] [--dry-run]
 
@@ -136,7 +265,7 @@ proxy-helper proxy profile list
 # Habilitar um perfil: aplica aos targets e marca como ativo
 # (só um perfil fica ativo por vez)
 proxy-helper proxy profile enable trabalho
-# Com o encanamento do "proxy serve" montado (--via-local), esse mesmo
+# Com o encanamento do "proxy serve" montado, esse mesmo
 # comando não toca em target nenhum: só troca o perfil ativo e recarrega
 # o daemon. Veja "Proxy local" abaixo.
 
@@ -181,9 +310,11 @@ Isso separa duas coisas que hoje ficam misturadas:
 
 | Ação | Comando | Frequência | Precisa de sudo |
 |---|---|---|---|
-| Instalar o serviço | `proxy serve install` | uma vez | não |
-| Apontar os targets para ele | `proxy set --host … --via-local` | uma vez | sim |
-| Desligar o proxy | `proxy off` | diário | não |
+| Montar tudo de uma vez | `proxy setup --host … --port …` | uma vez | sim |
+| (ou, passo a passo) instalar o serviço | `proxy serve install` | uma vez | não |
+| (…) apontar os targets para ele | `proxy set --host …` (é o padrão) | uma vez | sim |
+| Trocar o modo de roteamento | `proxy mode auto\|upstream\|direct` | diário | não |
+| Desligar o proxy | `proxy off` (= `proxy mode direct`) | diário | não |
 | Religar | `proxy on` | diário | não |
 | Trocar de proxy | `proxy profile enable <nome>` | diário | não |
 | Desfazer o encanamento | `proxy unset` | raro | sim |
@@ -198,17 +329,95 @@ antigo continua valendo: `profile enable` aplica a config real aos targets.
 
 A regra que separa os dois eixos: **`unset` desfaz o encanamento** (volta
 os targets a não apontar mais pro daemon); **`off` só manda o daemon rotear
-tudo direto**, sem tocar em target algum. Um daemon com perfil vazio é
+tudo direto**, sem tocar em target algum. Um daemon em modo `direct` é
 inofensivo — é só um proxy que faz `DIRECT` pra tudo.
 
+### `proxy setup`
+
+`proxy setup` faz numa tacada o arranjo que o resto da ferramenta pressupõe:
+instala e sobe o daemon, aponta todos os targets para ele e deixa o modo em
+`auto`. É seguro reexecutar — um daemon já ativo é deixado em paz, e
+`--dry-run` mostra o plano inteiro sem mexer em nada.
+
+Ele existe porque esse arranjo antes se montava à mão com três comandos na
+ordem certa. Hoje `proxy set`/`proxy profile enable` já apontam pro daemon
+por padrão — o detalhe que antes ninguém descobria sozinho virou o
+comportamento normal —, mas `proxy setup` continua sendo o jeito de instalar
+o serviço e montar tudo numa tacada só, sem precisar lembrar da ordem dos
+três comandos.
+
 ```
-# Uma vez por máquina
+proxy-helper proxy setup --host 10.0.0.5 --port 8080 --profile trabalho
+proxy-helper proxy setup --profile trabalho          # reusa um perfil salvo
+proxy-helper proxy setup --mode upstream --host …    # sem o fallback do auto
+```
+
+### Quando o daemon não está de pé
+
+Apontar todos os targets para um daemon local é o que torna a alternância
+instantânea e sem sudo — e é também o que faz desse daemon um ponto único de
+falha. Se ele não estiver escutando, **a máquina inteira fica sem rede**.
+
+O `Restart=always` da unit cobre a queda comum. Para o resto, o `proxy status`
+avisa em primeiro lugar, e a aba Status da GUI mostra uma faixa vermelha:
+
+```
+  WARNING: every target points at 127.0.0.1:8888, but nothing is listening there.
+           Until the daemon is back, this machine has no network access at all.
+           Restart it:  systemctl --user restart proxy-helper.service
+           Or take the targets off it:  proxy-helper proxy unset --targets all
+```
+
+O aviso vem de uma sondagem TCP na porta, não do `systemctl is-active`: um
+daemon que perdeu a porta para outro processo, ou que está no meio de um
+reinício, aparece como *active* e não serve para nada.
+
+Se o daemon não subir de jeito nenhum, `proxy unset --targets all` é a saída
+— devolve os targets ao estado direto e a máquina volta a ter rede.
+
+### Modos de roteamento
+
+O que o daemon faz com uma requisição é o campo `mode` do `config.json`:
+
+| Modo | Comportamento |
+|---|---|
+| `auto` | encaminha enquanto o upstream responde; cai para direto quando ele para |
+| `upstream` | sempre encaminha — nunca deixa tráfego sair por fora do proxy |
+| `direct` | nunca encaminha; manda tudo direto |
+
+```
+proxy-helper proxy mode            # mostra o modo atual
+proxy-helper proxy mode direct     # equivale a "proxy off"
+proxy-helper proxy mode auto
+```
+
+`auto` é para o notebook que troca de rede: sem ele, sair da rede corporativa
+com o proxy ligado deixa a máquina sem internet até alguém lembrar de
+desligar. Em compensação, `auto` **manda o tráfego pela saída direta** quando
+o upstream cai — quem não pode aceitar isso deve fixar `upstream`, que
+continua encaminhando mesmo com o upstream fora do ar.
+
+O perfil selecionado **não** é apagado ao desligar: `active_profile` diz qual
+perfil está escolhido e `mode` diz se ele está em uso. Por isso o seletor
+continua mostrando o perfil enquanto o tráfego vai direto, e um `proxy on`
+depois não precisa adivinhar nada.
+
+Configs criadas antes do campo `mode` são migradas na primeira leitura: com um
+perfil ativo viram `upstream` (comportamento idêntico ao anterior); desligadas,
+viram `direct` com o perfil que estava guardado voltando a aparecer selecionado.
+
+```
+# Uma vez por máquina — instala o daemon, aponta os alvos e deixa o modo pronto
+proxy-helper proxy setup --host 10.0.0.5 --port 8080 --profile trabalho
+
+# (equivale a fazer isto na mão, na ordem certa)
 proxy-helper proxy serve install
-proxy-helper proxy set --profile trabalho --via-local
+proxy-helper proxy set --profile trabalho
 
 # No dia a dia, sem sudo
-proxy-helper proxy off                     # tudo direto
-proxy-helper proxy on                      # volta pro último perfil
+proxy-helper proxy off                     # tudo direto (= proxy mode direct)
+proxy-helper proxy mode auto               # encaminha só quando o upstream responde
+proxy-helper proxy on                      # volta a encaminhar
 proxy-helper proxy on vpn-casa             # ou troca pra outro perfil
 proxy-helper proxy profile enable trabalho # idem, via profile
 
@@ -216,13 +425,17 @@ proxy-helper proxy profile enable trabalho # idem, via profile
 proxy-helper proxy unset --targets ...
 ```
 
-`proxy set --via-local` (e `proxy profile enable --via-local`) recusam
-rodar se o daemon não estiver instalado e ativo, e dizem exatamente o que
-rodar (`proxy serve install`). `proxy serve uninstall` remove o serviço.
+Por padrão (sem `--no-via-local`), `proxy set` e `proxy profile enable`
+recusam rodar se o daemon não estiver instalado e ativo, e dizem exatamente
+o que rodar (`proxy serve install`). Quem não roda o daemon usa
+`--no-via-local` como escape hatch: volta ao comportamento antigo, gravando
+a credencial direto em cada target. `proxy serve uninstall` remove o
+serviço.
 
 A porta padrão é 8888. Para usar outra, passe `--port` no
 `proxy serve install`: ela fica gravada em `local_port` no `config.json`, e
-tanto `--via-local` quanto o `proxy status` passam a usar essa porta.
+tanto o roteamento via daemon (o padrão) quanto o `proxy status` passam a
+usar essa porta.
 `proxy unset` (de todos os targets) desfaz o encanamento; um `unset`
 parcial, de alguns targets só, mantém o aviso — os outros ainda apontam
 pro loopback.
@@ -327,9 +540,9 @@ não aparecem na tabela — ela é só de requisições. Eles continuam no
 ### Docker e containers
 
 Containers **não alcançam o `127.0.0.1` do host** — lá dentro, `127.0.0.1` é o
-próprio container. Isso torna o `--via-local` parcialmente quebrado para
-Docker, e de um jeito confuso: `docker pull` funciona (o `dockerd` roda no
-host), mas todo `RUN` do build que precise de rede morre com
+próprio container. Isso torna o roteamento via daemon parcialmente quebrado
+para Docker, e de um jeito confuso: `docker pull` funciona (o `dockerd` roda
+no host), mas todo `RUN` do build que precise de rede morre com
 `Failed to connect to 127.0.0.1 port 8888`.
 
 A saída é `--docker-bridge`, que faz o daemon escutar **também** no gateway da
@@ -337,7 +550,7 @@ bridge do Docker:
 
 ```bash
 proxy-helper proxy serve install --docker-bridge
-proxy-helper proxy set --profile trabalho --via-local
+proxy-helper proxy set --profile trabalho
 sudo systemctl restart docker
 ```
 
@@ -353,14 +566,47 @@ arranque, e é o passo que mais se esquece.
 > rede local, só aos containers. Por isso é opt-in, o daemon recusa escutar em
 > qualquer endereço publicamente roteável, e loga um aviso no arranque.
 
-Sem a flag, o `proxy set --via-local` avisa que os builds vão falhar em vez de
-deixar você descobrir no meio de um deploy.
+Sem a flag `--docker-bridge`, o `proxy set` avisa que os builds vão falhar em
+vez de deixar você descobrir no meio de um deploy.
+
+#### Node.js dentro de containers
+
+O `docker-config` injeta as variáveis de proxy nos containers, mas o Docker só
+repassa as chaves que ele conhece (`httpProxy`, `httpsProxy`, `noProxy`,
+`ftpProxy`, `allProxy`) — não há como acrescentar outras. Isso importa para
+Node, que tem dois comportamentos diferentes:
+
+- **`npm`, `yarn`, `pnpm`, `axios` e afins funcionam.** Essas ferramentas leem
+  `HTTPS_PROXY` por conta própria.
+- **O `fetch()` global do Node ignora `HTTPS_PROXY`** e falha com
+  `ENETUNREACH`. Ele só respeita a variável quando `NODE_USE_ENV_PROXY=1`
+  também está no ambiente — e essa não é repassada pelo Docker.
+
+Para Node 22 e 24, resolva na imagem:
+
+```dockerfile
+ENV NODE_USE_ENV_PROXY=1
+```
+
+No Node 20 a variável não existe (foi adicionada no 22), então só a própria
+aplicação pode rotear o `fetch`:
+
+```js
+// no topo do ponto de entrada, antes do primeiro fetch()
+import { setGlobalDispatcher, EnvHttpProxyAgent } from "undici";
+setGlobalDispatcher(new EnvHttpProxyAgent());
+```
+
+`EnvHttpProxyAgent` (e não `ProxyAgent`) porque ele respeita `NO_PROXY`,
+mantendo o tráfego interno fora do proxy. Funciona igual em todas as versões
+do Node, então serve como solução única para quem mantém imagens variadas.
 
 ### Modo de falha
 
-Se o serviço parar com o encanamento ativo (`--via-local`), tudo que
-depende do proxy passa a falhar com `connection refused`, porque os
-targets continuam apontando pro loopback e não há mais nada escutando lá.
+Se o serviço parar com o encanamento ativo (o caso comum, já que é o
+padrão), tudo que depende do proxy passa a falhar com `connection refused`,
+porque os targets continuam apontando pro loopback e não há mais nada
+escutando lá.
 `proxy status` avisa isso no topo da saída:
 
 ```
